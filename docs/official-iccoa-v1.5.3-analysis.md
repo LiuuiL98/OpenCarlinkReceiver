@@ -885,3 +885,20 @@ A second pass over the `Crc16.checksum` DEX code items (in `classes7.dex`) confi
 ### Implementation status
 
 Do not treat `0xA001` alone as enough to select a named CRC-16 variant. For interoperability, recover the full arithmetic and the exact bytes covered by the header checksum, then validate against at least one real captured official frame (or a reproducible official test vector). The DEX instruction-format reference explains why instruction widths and branch offsets must be decoded correctly before drawing conclusions from a control-flow dump: https://source.android.com/docs/core/runtime/instruction-formats.
+
+
+## 33. Reverse-engineering quality gate: do not infer CRC parameters from a partial disassembly
+
+During the next pass, the raw code-item instruction words for `Crc16.checksum` were extracted from `classes7.dex` at code-item offsets `0x70440` and `0x704b8`. This confirms the methods are available for a direct instruction-level decode, but the lightweight local decoder does not yet handle all DEX instruction formats and branch offsets correctly. Therefore it is not safe to publish a full pseudocode formula from that dump.
+
+This is an explicit quality gate, not a protocol conclusion: the previous evidence still supports a shared table-driven CRC16 loop and a table consistent with reflected polynomial `0xA001`, but it does **not** prove the init value, final XOR, signed-byte treatment, exact loop bounds, or header checksum coverage.
+
+### Next verification procedure
+
+1. Decode every instruction using the official DEX instruction formats, including correct widths for conditional branches, register moves, field accesses, arithmetic, and invokes.
+2. Resolve the `CRC16_TABLE` static initializer to its complete 256-entry table, and compare it against a generated candidate table.
+3. Recover the accumulator initialization and each loop's table-index/update expression from both overloads; confirm both overloads are equivalent for the same byte sequence.
+4. Decode `MessageHeader.assign(byte[])` and `createMessageHeaderFromBytes(byte[])` independently to establish the exact start offset and length passed to `checksum`.
+5. Validate the resulting implementation against a captured, non-sensitive official protocol frame or a reproducible test vector before using it in the receiver.
+
+Until steps 1–4 are complete, keep CRC implementation out of the compatibility path rather than shipping a plausible but unverified checksum.
