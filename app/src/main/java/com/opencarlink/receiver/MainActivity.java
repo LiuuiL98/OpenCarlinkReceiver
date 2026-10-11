@@ -58,6 +58,21 @@ public class MainActivity extends Activity {
     private final BroadcastReceiver usbPermissionReceiver = new BroadcastReceiver() {
         @Override public void onReceive(Context context, Intent intent) {
             String action = intent.getAction();
+            if (UsbManager.ACTION_USB_DEVICE_ATTACHED.equals(action)
+                    || UsbManager.ACTION_USB_DEVICE_DETACHED.equals(action)) {
+                boolean attached = UsbManager.ACTION_USB_DEVICE_ATTACHED.equals(action);
+                UsbDevice hotplugDevice = intent.getParcelableExtra(UsbManager.EXTRA_DEVICE);
+                String deviceSummary = hotplugDevice == null ? "设备信息不可用"
+                        : "VID:PID=" + hex4(hotplugDevice.getVendorId()) + ":" + hex4(hotplugDevice.getProductId())
+                        + "，接口数=" + hotplugDevice.getInterfaceCount();
+                recordEvent(attached ? "USB_ATTACH" : "USB_DETACH",
+                        (attached ? "系统广播：USB 设备已接入；" : "系统广播：USB 设备已断开；")
+                                + deviceSummary + "。诊断会话保持开启，以便捕获 AOA 重新枚举后的设备。");
+                setUsbStatus(attached ? "检测到 USB 设备接入：" + deviceSummary
+                        : "检测到 USB 设备断开：" + deviceSummary + "。如果刚刚切换 AOA，这可能是预期的重新枚举。");
+                refreshDiagnostics();
+                return;
+            }
             if (!ACTION_USB_PERMISSION.equals(action) && !ACTION_AOA_PERMISSION.equals(action) && !ACTION_AOA_DATA_PERMISSION.equals(action)) return;
             boolean aoaRequest = ACTION_AOA_PERMISSION.equals(action);
             UsbDevice device = intent.getParcelableExtra(UsbManager.EXTRA_DEVICE);
@@ -96,6 +111,8 @@ public class MainActivity extends Activity {
         IntentFilter filter = new IntentFilter(ACTION_USB_PERMISSION);
         filter.addAction(ACTION_AOA_PERMISSION);
         filter.addAction(ACTION_AOA_DATA_PERMISSION);
+        filter.addAction(UsbManager.ACTION_USB_DEVICE_ATTACHED);
+        filter.addAction(UsbManager.ACTION_USB_DEVICE_DETACHED);
         if (Build.VERSION.SDK_INT >= 33) {
             registerReceiver(usbPermissionReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
         } else {
@@ -130,7 +147,7 @@ public class MainActivity extends Activity {
         root.addView(title, matchWrap());
 
         TextView subtitle = new TextView(this);
-        subtitle.setText("车机兼容性诊断工具 · 版本 0.2.2");
+        subtitle.setText("车机兼容性诊断工具 · 版本 0.2.3");
         subtitle.setTextColor(0xFFB7C5D3);
         subtitle.setTextSize(13);
         subtitle.setPadding(0, dp(6), 0, dp(18));
@@ -390,7 +407,7 @@ public class MainActivity extends Activity {
     private void exportDiagnosticLog() {
         recordEvent("EXPORT", "用户请求导出脱敏阶段日志。");
         String text = "OpenCarlinkReceiver USB/AOA 诊断日志\n"
-                + "应用版本：0.2.2\n"
+                + "应用版本：0.2.3\n"
                 + "车机设备：" + Build.MANUFACTURER + " " + Build.MODEL
                 + "；Android " + Build.VERSION.RELEASE + "（API " + Build.VERSION.SDK_INT + "）\n"
                 + "当前会话：" + diagnosticSessionId + "\n"
