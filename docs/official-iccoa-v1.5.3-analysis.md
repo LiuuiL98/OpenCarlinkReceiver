@@ -497,3 +497,61 @@ Still not established from this pass:
 - whether authentication/certificate startup ordering is fixed or lifecycle-dependent.
 
 The next pass should disassemble `SocketChannelReadTask.run()`, `NetChannel`, `SocketChannel.lambda$send$8$SocketChannel`, `SocketChannel.lambda$request$7$SocketChannel`, and the channel factory/owner. No authentication implementation should be written until those points are confirmed.
+
+
+## 19. SocketChannelReadTask and outbound send path recovered from DEX code items
+
+This pass went beyond class/method string inventory: it parsed the DEX class-data tables, resolved method IDs and code-item offsets, and walked instruction streams to recover actual invoke instructions. It is still a targeted instruction scanner, not a full decompiler; branch predicates and all register values should be checked with JADX/smali before translating the flow into production code.
+
+### 19.1 Receive path: exact high-level sequence
+
+The recovered `SocketChannelReadTask.run()` invoke sequence in `classes7.dex` is:
+
+1. `ProtocolConfig.getLogger()`, then `getSocketInputStream()`.
+2. Wrap the input stream using `Channels.newChannel(InputStream)`.
+3. Allocate a ByteBuffer for the header and obtain `MessageHeader.newEmptyHeader()`.
+4. Call `fillBuffer(ReadableByteChannel, ByteBuffer, int)` to fill the header buffer.
+5. Flip the buffer, take its backing array, and call `MessageHeader.assign(byte[])`.
+6. Read `MessageHeader.getLength()`; on the error path it logs and calls `skipReadBuff()`.
+7. Call `allocBodyBuff(int, ByteBuffer)`, then `fillBuffer(...)` to read the body.
+8. Obtain a `UCarMessage`, copy the header into it, and branch on `isEncrypted()`.
+9. The encrypted paths call `SecurityManager.decrypt(ByteBuffer, boolean)` or `decrypt(ByteBuffer)`; the method then updates body length and attaches/reuses the body buffer.
+10. Dispatch handling through the executor selected by `ProtocolConfig.getMessageHandleExecutor(ChannelType)`. The runnable callback calls `FutureRequestManager.complete(UCarMessage)`, then `SocketChannel.onMessage(UCarMessage)`, and releases the message.
+
+This confirms the UCar parser is a stream-oriented socket reader, distinct from the AOA 8-byte transport header. It also confirms encryption/decryption is integrated in the shared channel read path, rather than implemented in `ConnectChannel` itself.
+
+**Important caveat:** the invoke scan shows calls to `MessageHeader.assign(byte[])` and `getLength()`, but does not by itself prove whether `assign` validates CRC. That must be confirmed by inspecting `MessageHeader.assign` and its callees.
+
+### 19.2 Send path: header and body are written separately
+
+The recovered `SocketChannel.lambda$send$8$SocketChannel(UCarMessage, SendFutureCallback)` method includes these calls in order:
+
+- `Socket.getOutputStream()`;
+- check `SocketChannel.isEncrypted()`;
+- obtain a temporary `UCarMessage` and copy the original `MessageHeader`;
+- when the encrypted branch is taken, pass `getBodyBuffer()` through `SecurityManager.encrypt(ByteBuffer)`;
+- update header total length using `MessageHeader.updateLength(int)`;
+- serialize the header using `MessageHeader.toTmpBytes()`;
+- write the serialized header bytes to the output stream;
+- write the body buffer (or temporary body) and flush;
+- report completion through `SendFutureCallback.completed(Boolean)`, or report errors through `failed(Exception)`.
+
+The method has both a path that writes the body buffer and a path that writes a temporary body byte array; the exact conditions selecting those paths require control-flow inspection. The observable send design is nevertheless clear: UCar header bytes and body bytes are emitted separately to the socket stream, with encryption performed in the channel layer when enabled.
+
+### 19.3 What this changes for receiver design
+
+- Do not try to decode UCar messages directly from each USB Bulk IN packet.
+- First reconstruct AOA's 8-byte packet framing and channel/socket bridge.
+- On the UCar socket side, implement a bounded read loop that obtains the fixed header, validates its fields/CRC as the official code does, then reads exactly the declared body length.
+- Keep encryption as a distinct stage, and do not mark a message authenticated merely because a header parses or a protobuf decodes.
+- Before implementation, inspect `MessageHeader.assign`, `MessageHeader.updateChecksum`, `fillBuffer`, `allocBodyBuff`, `skipReadBuff`, and `NetChannel` to establish CRC behavior, length limits, partial-read handling, and socket lifecycle.
+
+### 19.4 Remaining unknowns
+
+The DEX instruction walk did not yet establish:
+- the exact CRC validation point and failure behavior;
+- the numeric maximum permitted header/body length and whether `getLength()` is checked before allocation;
+- the full `NetChannel` connection lifecycle and how its socket is created;
+- the `ChannelType`/port values and which channel is used for auth versus control/media;
+- whether all channels use encryption, and the exact encrypted body/nonce framing;
+- certificate/auth startup ordering and retry/error transitions.
