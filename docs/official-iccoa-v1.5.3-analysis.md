@@ -806,3 +806,28 @@ For a first diagnostic implementation, it is safer to log these as separate even
 ### Next static-analysis target
 
 Inspect `FutureRequestManager` fields and methods (`add`, `complete`, timeout/cancel/remove paths) and then disassemble the conditional branches in `SocketChannel.onMessage`. Record the actual key used for correlation and the response-type conditions only when supported by the instruction operands. In parallel, finish `Crc16` arithmetic and compare it with a valid captured header before implementing a checksum function.
+
+
+## 30. FutureRequestManager correlation key and SocketChannel handler behavior
+
+The DEX invoke scan of `FutureRequestManager` now confirms the key used for pending-request lookup:
+
+- `addRequest(RequestFuture)` calls `RequestFuture.getRequestId()`, wraps that integer with `Integer.valueOf`, inserts the future into a map, and places the future in a `DelayQueue` for timeout handling.
+- `complete(UCarMessage)` calls `UCarMessage.getSeqId()`, wraps that integer, removes the matching map entry, and, if a future was found, invokes `RequestFuture.handleMessage(message)`. If no future is found, it logs a warning rather than returning a matched request.
+- `RequestFuture.handleMessage(message)` calls the callback's `convertMessage(message)`, checks cancellation, attempts to set the future result, invokes `completed(...)`, and releases the message in its own path. Because the read-task path also calls `UCarMessage.release()` after `SocketChannel.onMessage`, message ownership/release behavior needs careful compatibility review rather than copying this lifecycle blindly.
+- The manager also has `clearRequestsWhileDisconnect()`, `removeRequest(int)`, a daemon timeout worker using `DelayQueue.take()`, and timeout failure handling. Pending requests are therefore not just a plain sequence-ID map; timeout and disconnect cleanup are part of the lifecycle.
+
+`SocketChannel.onMessage(UCarMessage)` calls the configured `UCarChannel.MessageHandler.onMessage(message)`, then calls `UCarMessage.isSendSyncMessage(message)`. The instruction-reference scan also shows a logging/callback lambda on one branch, but this scan alone does not reveal the exact branch predicate or whether that branch handles all synchronous responses. The exact order after the message-handler call and the conditions for the callback branch require direct CFG review.
+
+### Supported conclusions
+
+1. The request correlation key is the integer returned by `UCarMessage.getSeqId()`, matched against `RequestFuture.getRequestId()`.
+2. A request match removes the future from the pending map before handing the message to `RequestFuture.handleMessage`.
+3. A message without a matching pending future is still passed on to `SocketChannel.onMessage` by the read-task dispatch path; unmatched correlation is not by itself proof that the message is invalid.
+4. The official code has timeout and disconnect cleanup paths; a receiver should not leave pending requests indefinitely.
+
+### Still open
+
+- Exact `isSendSyncMessage` branch condition and behavior.
+- Whether the configured handler can retain or asynchronously use a message after the read task's release point.
+- CRC initial accumulator and update arithmetic, plus runtime verification of channel ports.
