@@ -998,3 +998,22 @@ For a local implementation, keep the parameters explicit rather than hiding assu
 - stored checksum byte order: big-endian 16-bit field at offset 18 (verified).
 
 Once the loop is decoded, implement it as a small pure function and test it against both the extracted table and the ByteBuffer overload. Then validate against a captured valid frame before integrating it into the receiver. Do not substitute a common CRC16 library variant merely because its table polynomial matches.
+
+
+## 39. Practical next step: isolate CRC implementation behind tests before integration
+
+The exact DEX arithmetic for the checksum loop has not been independently decoded and cross-checked in this session. The next safe engineering step is therefore to define the test contract before implementing the checksum, so an assumed CRC variant cannot silently enter the transport parser.
+
+### Required tests
+
+1. **Range contract:** the header checksum input is exactly 18 bytes starting at offset 0; bytes 18–19 hold the stored big-endian checksum and are excluded.
+2. **Bounds:** reject a header shorter than 20 bytes before attempting to read or validate the checksum.
+3. **Overload parity:** for identical bytes and identical start/length, the byte-array and ByteBuffer checksum overloads must return the same value.
+4. **Mutation test:** flipping any bit in bytes 0–17 should normally invalidate the stored checksum; changing only the stored CRC bytes should change the compared value, not the computed CRC.
+5. **Golden vector:** add a test with a known-valid, non-sensitive official header and its expected checksum once one is available.
+
+### Do not overstate completion
+
+The table and coverage are established; the full CRC parameters are not. The Android DEX documentation notes that instructions are encoded as 16-bit code units and that formats determine operand/register layout, so a trustworthy formula requires a complete instruction decode rather than inference from the table alone: https://source.android.com/docs/core/runtime/instruction-formats.
+
+This section is a test plan, not a claim that these tests or a production CRC implementation have already been added to the app.
