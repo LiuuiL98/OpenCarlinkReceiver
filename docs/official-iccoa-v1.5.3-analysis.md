@@ -707,3 +707,29 @@ On the channel's `onConnect()` callback, the manager creates a `CarVerifier`, ca
 ### 24.4 Next concrete target
 
 Trace callers of `UCarAuthService.start(String)` and `CarCertManager.start(String)` and decode the enum constructor's two integer operands to map channel ports. This is the remaining step needed to connect the authentication sequence to a concrete transport endpoint.
+
+
+## 25. ChannelType port constants: initializer sequence decoded further
+
+A closer pass over the `ChannelType.<clinit>()` instruction sequence recovers the constructor pattern: each enum instance is created with its enum name, ordinal, and port value. The initializer's values align in declaration order as follows:
+
+| ChannelType | Port constant recovered from initializer |
+|---|---:|
+| CUSTOM | 0 (no explicit port constant in the shown constructor sequence) |
+| UIBC | 4321 |
+| RTSP | 7236 |
+| RTP | 15550 |
+| AUTH | 57209 |
+| CONTROL | 57219 |
+| MEDIA | 57229 |
+| SENSOR | 57239 |
+| CERT | 57249 |
+| VIDEO | 57259 |
+
+The UIBC/RTSP/RTP constants are directly visible in the initializer sequence; the subsequent values appear as `57209`, `57219`, `57229`, `57239`, `57249`, and `57259` alongside the remaining enum constructors. This is a static DEX-derived mapping, not a runtime packet capture. Validate the AUTH/CERT endpoints against a controlled runtime trace before wiring the receiver to them, because enum values alone do not prove which channels are actually opened on a given connection path.
+
+### Receiver implementation guidance
+
+- Treat these as candidate local TCP/socket channel ports in the UCar channel layer, not USB endpoints and not AOA Bulk endpoint addresses.
+- Do not confuse the AOA bridge's `port` field in its create-socket message with a raw USB endpoint number.
+- Use the recovered mapping to guide logging and endpoint tracing; only promote it to an implementation constant after verifying the caller's `ChannelType` and observed socket lifecycle.
