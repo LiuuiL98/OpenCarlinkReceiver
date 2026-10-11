@@ -3,7 +3,10 @@ package com.opencarlink.receiver;
 import android.app.Activity;
 import android.content.Context;
 import android.content.pm.PackageManager;
+import android.hardware.usb.UsbConstants;
 import android.hardware.usb.UsbDevice;
+import android.hardware.usb.UsbEndpoint;
+import android.hardware.usb.UsbInterface;
 import android.hardware.usb.UsbManager;
 import android.media.MediaCodecInfo;
 import android.media.MediaCodecList;
@@ -18,12 +21,12 @@ import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 
+import java.util.Locale;
 import java.util.Map;
 
 public class MainActivity extends Activity {
     private LinearLayout root;
     private TextView diagnostics;
-    private final StringBuilder log = new StringBuilder();
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
@@ -49,7 +52,7 @@ public class MainActivity extends Activity {
         root.addView(title, matchWrap());
 
         TextView subtitle = new TextView(this);
-        subtitle.setText("车机兼容性诊断工具 · 版本 0.1.0");
+        subtitle.setText("车机兼容性诊断工具 · 版本 0.1.1");
         subtitle.setTextColor(0xFFB7C5D3);
         subtitle.setTextSize(13);
         subtitle.setPadding(0, dp(6), 0, dp(18));
@@ -80,7 +83,7 @@ public class MainActivity extends Activity {
     private void refreshDiagnostics() {
         StringBuilder out = new StringBuilder();
         out.append("【系统信息】\n");
-        out.append("安卓版本：").append(Build.VERSION.RELEASE).append("（API ").append(Build.VERSION.SDK_INT).append(")\n");
+        out.append("安卓版本：").append(Build.VERSION.RELEASE).append("（API ").append(Build.VERSION.SDK_INT).append("）\n");
         out.append("设备型号：").append(Build.MANUFACTURER).append(" ").append(Build.MODEL).append("\n");
         out.append("处理器架构：");
         if (Build.VERSION.SDK_INT >= 21 && Build.SUPPORTED_ABIS != null) {
@@ -101,10 +104,7 @@ public class MainActivity extends Activity {
         } else {
             out.append("检测到 USB 设备数量：").append(devices.size()).append("\n");
             for (UsbDevice device : devices.values()) {
-                out.append("- ").append(device.getDeviceName())
-                   .append(" VID=").append(device.getVendorId())
-                   .append(" PID=").append(device.getProductId())
-                   .append(" 接口数量=").append(device.getInterfaceCount()).append("\n");
+                appendUsbDevice(out, usbManager, device);
             }
         }
 
@@ -138,8 +138,7 @@ public class MainActivity extends Activity {
             int found = 0;
             for (MediaCodecInfo codec : codecs) {
                 if (codec.isEncoder()) continue;
-                String[] types = codec.getSupportedTypes();
-                for (String type : types) {
+                for (String type : codec.getSupportedTypes()) {
                     if ("video/avc".equalsIgnoreCase(type)) {
                         out.append("- ").append(codec.getName()).append("\n");
                         found++;
@@ -153,8 +152,79 @@ public class MainActivity extends Activity {
         }
 
         out.append("\n【下一步】\n");
-        out.append("如需反馈设备兼容性，请复制以上诊断信息。目前版本尚未尝试建立 Carlink 协议连接。\n");
+        out.append("请比较切换发送端 USB 用途前后的 VID/PID、接口类别及端点信息。若这些信息完全一致，说明 Android USB 主机 API 暂未观察到模式变化；这本身不能证明 ICCOA 协议是否存在。\n");
+        out.append("本版本仅收集公开 USB 描述符信息，不会自动申请 USB 权限或向设备发送数据。\n");
         diagnostics.setText(out.toString());
+    }
+
+    private void appendUsbDevice(StringBuilder out, UsbManager usbManager, UsbDevice device) {
+        out.append("\n设备：").append(device.getDeviceName()).append("\n");
+        out.append("VID：").append(hex4(device.getVendorId())).append(" (").append(device.getVendorId()).append(")\n");
+        out.append("PID：").append(hex4(device.getProductId())).append(" (").append(device.getProductId()).append(")\n");
+        out.append("设备类/子类/协议：")
+           .append(hex2(device.getDeviceClass())).append(" / ")
+           .append(hex2(device.getDeviceSubclass())).append(" / ")
+           .append(hex2(device.getDeviceProtocol())).append("\n");
+        out.append("接口数量：").append(device.getInterfaceCount()).append("\n");
+        out.append("本应用已获 USB 访问权限：")
+           .append(usbManager.hasPermission(device) ? "是" : "否（当前版本不会自动申请）").append("\n");
+
+        if (Build.VERSION.SDK_INT >= 21) {
+            try {
+                String manufacturer = device.getManufacturerName();
+                String product = device.getProductName();
+                String serial = device.getSerialNumber();
+                if (manufacturer != null && manufacturer.length() > 0) {
+                    out.append("USB 制造商字符串：").append(manufacturer).append("\n");
+                }
+                if (product != null && product.length() > 0) {
+                    out.append("USB 产品字符串：").append(product).append("\n");
+                }
+                if (serial != null && serial.length() > 0) {
+                    out.append("USB 序列号：").append(serial).append("\n");
+                }
+            } catch (SecurityException e) {
+                out.append("USB 字符串描述符：系统未授权读取\n");
+            } catch (Exception e) {
+                out.append("USB 字符串描述符：读取失败（").append(e.getClass().getSimpleName()).append("）\n");
+            }
+        }
+
+        for (int i = 0; i < device.getInterfaceCount(); i++) {
+            UsbInterface usbInterface = device.getInterface(i);
+            out.append("  接口 #").append(i)
+               .append("：Class=").append(hex2(usbInterface.getInterfaceClass()))
+               .append(" Subclass=").append(hex2(usbInterface.getInterfaceSubclass()))
+               .append(" Protocol=").append(hex2(usbInterface.getInterfaceProtocol()))
+               .append(" 端点数=").append(usbInterface.getEndpointCount()).append("\n");
+            for (int j = 0; j < usbInterface.getEndpointCount(); j++) {
+                UsbEndpoint endpoint = usbInterface.getEndpoint(j);
+                out.append("    端点 #").append(j)
+                   .append(" 地址=").append(hex2(endpoint.getAddress()))
+                   .append(" 方向=").append(endpoint.getDirection() == UsbConstants.USB_DIR_IN ? "IN（设备到主机）" : "OUT（主机到设备）")
+                   .append(" 类型=").append(endpointType(endpoint.getType()))
+                   .append(" 最大包长=").append(endpoint.getMaxPacketSize())
+                   .append(" 间隔=").append(endpoint.getInterval()).append("\n");
+            }
+        }
+    }
+
+    private String endpointType(int type) {
+        switch (type) {
+            case UsbConstants.USB_ENDPOINT_XFER_CONTROL: return "CONTROL";
+            case UsbConstants.USB_ENDPOINT_XFER_ISOC: return "ISOCHRONOUS";
+            case UsbConstants.USB_ENDPOINT_XFER_BULK: return "BULK";
+            case UsbConstants.USB_ENDPOINT_XFER_INT: return "INTERRUPT";
+            default: return "未知(" + type + ")";
+        }
+    }
+
+    private String hex2(int value) {
+        return String.format(Locale.US, "0x%02X", value & 0xFF);
+    }
+
+    private String hex4(int value) {
+        return String.format(Locale.US, "0x%04X", value & 0xFFFF);
     }
 
     private LinearLayout.LayoutParams matchWrap() {
