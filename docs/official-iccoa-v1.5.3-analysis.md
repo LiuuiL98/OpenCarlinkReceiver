@@ -979,3 +979,22 @@ The parallel parser reads the stored checksum at offset `0x12` and calls the sam
 - Stored CRC bytes 18–19 are not included in the CRC calculation.
 
 This coverage conclusion comes from the actual call arguments and constant values in the DEX, decoded using the DEX instruction formats. It is independent of the still-unresolved CRC accumulator initialization and finalization. The Android DEX bytecode reference documents register operands and instruction formats: https://source.android.com/docs/core/runtime/dalvik-bytecode.
+
+
+## 38. CRC16 loop parameters: polynomial/table are known; init and finalization still need bytecode proof
+
+With the checksum range now resolved as the first 18 header bytes, the next required step is to decode the loop in `Crc16.checksum(byte[], int, int)` and compare it with `checksum(ByteBuffer, int, int)`.
+
+The table is an exact match for the reflected `0xA001` table generator, but this alone is insufficient to name a CRC variant. Variants with the same polynomial/table can differ in initial accumulator and final XOR/reflection conventions. The current verified notes do not yet establish those remaining parameters from reliable instruction-level evidence.
+
+### Validation plan for the implementation
+
+For a local implementation, keep the parameters explicit rather than hiding assumptions inside a library default:
+- polynomial/table: reflected `0xA001` (verified table);
+- start offset and length for the message header: `0`, `18` (verified);
+- initial accumulator: pending exact bytecode decode;
+- byte-to-table-index expression: pending exact bytecode decode;
+- final XOR / output masking: pending exact bytecode decode;
+- stored checksum byte order: big-endian 16-bit field at offset 18 (verified).
+
+Once the loop is decoded, implement it as a small pure function and test it against both the extracted table and the ByteBuffer overload. Then validate against a captured valid frame before integrating it into the receiver. Do not substitute a common CRC16 library variant merely because its table polynomial matches.
