@@ -28,11 +28,12 @@ public class AoaTransportHeaderProbeTest {
         assertInvalid(new byte[] {0, 0, 0, 2, 4, 0, 0, 1}); // 64 MiB + 1
     }
 
-    @Test public void requiresACompleteHeaderAccordingToReturnedLength() {
+    @Test public void requiresACompleteHeaderAndConsistentReturnedLength() {
         byte[] data = new byte[16];
         assertFalse(AoaTransportHeaderProbe.isAvailable(null, 8));
         assertFalse(AoaTransportHeaderProbe.isAvailable(data, 7));
         assertFalse(AoaTransportHeaderProbe.isAvailable(new byte[7], 8));
+        assertFalse(AoaTransportHeaderProbe.isAvailable(new byte[8], 9));
         assertTrue(AoaTransportHeaderProbe.isAvailable(data, 8));
         try {
             AoaTransportHeaderProbe.decode(data, 7);
