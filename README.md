@@ -80,3 +80,12 @@ APK 文件生成在 `app/build/outputs/apk/debug/app-debug.apk`.
 本版本增加了 USB 主机侧的 `ACTION_USB_DEVICE_ATTACHED` / `ACTION_USB_DEVICE_DETACHED` 事件记录。执行 AOA 请求 53 或测试期间切换手机 USB 调试后，请观察日志中是否出现 `USB_DETACH` 与 `USB_ATTACH`，以及重新接入设备的 VID/PID 是否变化。
 
 USB 断开广播本身不区分原因：它可能是用户拔线、USB 功能重新配置、AOA 模式切换或系统重枚举。请结合操作时间和重新接入后的 VID/PID 判断，不要把单次 detach 直接解释为 ICCOA 认证失败。为了让 AOA 重新枚举后还能继续采集事件，诊断会话不会因为一次 detach 自动关闭。
+
+
+## 0.2.3：AOA+ADB 设备识别修正
+
+诊断日志中若出现 `VID:PID=0x18D1:0x2D01`，这表示手机已进入 AOA 配件模式并同时暴露 ADB 接口。该 PID 有两个 USB 接口：第一个是标准配件通信接口，第二个是 ADB 接口。当前诊断版会识别 `0x2D00`、`0x2D01`、`0x2D04` 和 `0x2D05`，并在只读接收测试中优先选取第一个具有 Bulk IN 的接口，不把 ADB 第二接口当作 ICCOA 通道。
+
+本版本也修正 AOA 请求 52 的身份字符串传输：每项 UTF-8 字符串都附加规范要求的 NUL 结束符，并在日志中分别记录原内容字节数和含结束符的传输字节数。请在 S25 保持 USB 调试开启时复测，重点观察切换后是否发现 `18D1:2D01`、Bulk IN 是否收到数据，以及手机端是否出现三星 Carlink 确认界面。
+
+说明：识别 PID 和发送标准 AOA 身份字段不等于 ICCOA 配对认证已实现。
