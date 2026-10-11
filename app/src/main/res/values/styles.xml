@@ -1,8 +1,8 @@
 <resources>
-    <style name="AppTheme" parent="@android:style/Theme.Material.NoActionBar">
+    <!-- Theme.Holo exists on API 19; Theme.Material does not. -->
+    <style name="AppTheme" parent="@android:style/Theme.Holo.NoActionBar">
         <item name="android:fontFamily">sans</item>
         <item name="android:colorAccent">#3F83F8</item>
-        <item name="android:windowLightStatusBar">false</item>
         <item name="android:statusBarColor">#101820</item>
         <item name="android:navigationBarColor">#101820</item>
     </style>
