@@ -30,6 +30,10 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 
 import java.text.SimpleDateFormat;
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.util.Date;
 import java.util.Locale;
 import java.util.Map;
@@ -147,7 +151,7 @@ public class MainActivity extends Activity {
         root.addView(title, matchWrap());
 
         TextView subtitle = new TextView(this);
-        subtitle.setText("车机兼容性诊断工具 · 版本 0.2.3");
+        subtitle.setText("车机兼容性诊断工具 · 版本 0.2.4");
         subtitle.setTextColor(0xFFB7C5D3);
         subtitle.setTextSize(13);
         subtitle.setPadding(0, dp(6), 0, dp(18));
@@ -306,6 +310,13 @@ public class MainActivity extends Activity {
         });
         root.addView(exportLog, matchWrap());
 
+        Button exportTrace = new Button(this);
+        exportTrace.setText("导出原始 ICCOA 通信追踪日志");
+        exportTrace.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { exportCommunicationTrace(); }
+        });
+        root.addView(exportTrace, matchWrap());
+
         Button clearLog = new Button(this);
         clearLog.setText("清除本机诊断日志");
         clearLog.setOnClickListener(new View.OnClickListener() {
@@ -378,8 +389,10 @@ public class MainActivity extends Activity {
 
     private void recordEvent(String stage, String message) {
         String timestamp = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US).format(new Date());
-        diagnosticLog.append(timestamp).append(" [").append(stage).append("] ")
-                .append(message == null ? "" : message.replace('\n', ' ')).append('\n');
+        String entry = timestamp + " [" + stage + "] "
+                + (message == null ? "" : message.replace('\n', ' '));
+        diagnosticLog.append(entry).append('\n');
+        appendTraceLine("EVENT " + entry);
         while (diagnosticLog.length() > 48000) {
             int cut = diagnosticLog.indexOf("\n", 3000);
             if (cut < 0) { diagnosticLog.setLength(0); break; }
@@ -388,6 +401,72 @@ public class MainActivity extends Activity {
         getSharedPreferences(PREFS_DIAGNOSTICS, MODE_PRIVATE).edit()
                 .putString(PREF_EVENT_LOG, diagnosticLog.toString()).apply();
         if (diagnosticEventLog != null) diagnosticEventLog.setText(diagnosticLog.toString());
+    }
+
+    private File traceFile() {
+        return new File(getFilesDir(), "iccoa-communication-trace.log");
+    }
+
+    private synchronized void appendTraceLine(String line) {
+        try {
+            File file = traceFile();
+            if (file.exists() && file.length() > 2 * 1024 * 1024) {
+                FileOutputStream reset = new FileOutputStream(file, false);
+                reset.write(("[" + new SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US).format(new Date())
+                        + "] TRACE_ROTATED previous log exceeded 2 MiB\\n").getBytes("UTF-8"));
+                reset.close();
+            }
+            FileOutputStream out = new FileOutputStream(file, true);
+            String timestamp = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US).format(new Date());
+            out.write((timestamp + " " + line + "\\n").getBytes("UTF-8"));
+            out.close();
+        } catch (Exception ignored) {
+            // Diagnostics must never crash the USB test if local trace storage fails.
+        }
+    }
+
+    private String readTraceLog() {
+        try {
+            File file = traceFile();
+            if (!file.exists()) return "尚无通信追踪记录。请先运行一次 AOA/Bulk IN 测试。";
+            FileInputStream in = new FileInputStream(file);
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            byte[] buffer = new byte[8192];
+            int count;
+            while ((count = in.read(buffer)) != -1) out.write(buffer, 0, count);
+            in.close();
+            return out.toString("UTF-8");
+        } catch (Exception e) {
+            return "读取通信追踪文件失败：" + e.getClass().getSimpleName() + "：" + safeMessage(e);
+        }
+    }
+
+    private String bytesToHex(byte[] data, int length) {
+        StringBuilder hex = new StringBuilder(Math.max(0, length) * 3);
+        for (int i = 0; i < length; i++) {
+            if (i > 0) hex.append(' ');
+            hex.append(String.format(Locale.US, "%02X", data[i] & 0xFF));
+        }
+        return hex.toString();
+    }
+
+    private void exportCommunicationTrace() {
+        recordEvent("TRACE_EXPORT", "用户请求导出本机通信追踪日志（包含逐次 Bulk IN 原始 HEX）。");
+        String text = "OpenCarlinkReceiver ICCOA 通信追踪日志\\n"
+                + "应用版本：0.2.4\\n"
+                + "设备：" + Build.MANUFACTURER + " " + Build.MODEL
+                + "；Android " + Build.VERSION.RELEASE + "（API " + Build.VERSION.SDK_INT + "）\\n"
+                + "说明：包含阶段事件、USB 接口/端点信息和逐次 Bulk IN 原始 HEX；不会主动记录六段 AOA 序列号原文或 usb_pin_code。原始 USB 数据仍可能含协议标识或其他设备信息，分享前请检查。\\n\\n"
+                + readTraceLog();
+        Intent share = new Intent(Intent.ACTION_SEND);
+        share.setType("text/plain");
+        share.putExtra(Intent.EXTRA_SUBJECT, "OpenCarlinkReceiver ICCOA 通信追踪日志");
+        share.putExtra(Intent.EXTRA_TEXT, text);
+        try {
+            startActivity(Intent.createChooser(share, "分享通信追踪日志"));
+        } catch (Exception e) {
+            setUsbStatus("无法打开系统分享界面：" + e.getClass().getSimpleName());
+        }
     }
 
     private void logCurrentUsbDiscovery() {
@@ -430,6 +509,7 @@ public class MainActivity extends Activity {
         diagnosticSessionActive = false;
         diagnosticSessionId = "未开始";
         getSharedPreferences(PREFS_DIAGNOSTICS, MODE_PRIVATE).edit().remove(PREF_EVENT_LOG).apply();
+        try { File file = traceFile(); if (file.exists()) file.delete(); } catch (Exception ignored) { }
         if (diagnosticEventLog != null) diagnosticEventLog.setText("尚无阶段日志。");
     }
 
@@ -613,14 +693,32 @@ public class MainActivity extends Activity {
                                 int errors = 0;
                                 StringBuilder sampleHex = new StringBuilder();
                                 long firstDataAtMs = -1;
-                                long deadline = android.os.SystemClock.elapsedRealtime() + 5000;
+                                long startedAtMs = android.os.SystemClock.elapsedRealtime();
+                                long deadline = startedAtMs + 5000;
+                                appendTraceLine("BULK_IN_START vid=" + hex4(device.getVendorId())
+                                        + " pid=" + hex4(device.getProductId())
+                                        + " interface=" + claimedInterface.getId()
+                                        + " endpoint=" + hex2(inEndpoint.getAddress())
+                                        + " endpoint_type=BULK max_packet=" + inEndpoint.getMaxPacketSize()
+                                        + " timeout_ms=5000");
+                                for (int epIndex = 0; epIndex < claimedInterface.getEndpointCount(); epIndex++) {
+                                    UsbEndpoint ep = claimedInterface.getEndpoint(epIndex);
+                                    appendTraceLine("USB_ENDPOINT interface=" + claimedInterface.getId()
+                                            + " index=" + epIndex + " address=" + hex2(ep.getAddress())
+                                            + " direction=" + (ep.getDirection() == UsbConstants.USB_DIR_IN ? "IN" : "OUT")
+                                            + " type=" + ep.getType() + " max_packet=" + ep.getMaxPacketSize());
+                                }
                                 while (android.os.SystemClock.elapsedRealtime() < deadline
                                         && successfulReads < 20 && totalBytes < 65536) {
                                     int count = connection.bulkTransfer(inEndpoint, buffer, buffer.length, 500);
+                                    long elapsedMs = android.os.SystemClock.elapsedRealtime() - startedAtMs;
                                     if (count > 0) {
                                         if (firstDataAtMs < 0) firstDataAtMs = android.os.SystemClock.elapsedRealtime();
                                         totalBytes += count;
                                         successfulReads++;
+                                        appendTraceLine("BULK_IN_PACKET index=" + successfulReads
+                                                + " elapsed_ms=" + elapsedMs + " length=" + count
+                                                + " hex=" + bytesToHex(buffer, count));
                                         int sampleLimit = Math.min(count, Math.max(0, (512 - sampleHex.length() / 3)));
                                         for (int k = 0; k < sampleLimit; k++) {
                                             if (sampleHex.length() > 0) sampleHex.append(' ');
@@ -628,11 +726,18 @@ public class MainActivity extends Activity {
                                         }
                                     } else if (count == 0 || count == -1) {
                                         timeoutOrNoData++;
+                                        appendTraceLine("BULK_IN_NO_DATA elapsed_ms=" + elapsedMs
+                                                + " return=" + count + " timeout_ms=500");
                                     } else {
                                         errors++;
+                                        appendTraceLine("BULK_IN_ERROR elapsed_ms=" + elapsedMs + " return=" + count);
                                         break;
                                     }
                                 }
+                                appendTraceLine("BULK_IN_END duration_ms="
+                                        + (android.os.SystemClock.elapsedRealtime() - startedAtMs)
+                                        + " reads=" + successfulReads + " bytes=" + totalBytes
+                                        + " no_data=" + timeoutOrNoData + " errors=" + errors);
                                 result = "AOA Bulk IN 只读测试结束（最长约 5 秒）。接口=" + claimedInterface.getId()
                                         + "，端点=" + hex2(inEndpoint.getAddress())
                                         + "，成功读取次数=" + successfulReads
