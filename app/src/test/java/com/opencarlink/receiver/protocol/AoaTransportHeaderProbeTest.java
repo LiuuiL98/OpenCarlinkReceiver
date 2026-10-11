@@ -28,12 +28,33 @@ public class AoaTransportHeaderProbeTest {
         assertInvalid(new byte[] {0, 0, 0, 2, 4, 0, 0, 1}); // 64 MiB + 1
     }
 
-    @Test public void requiresACompleteHeaderAndConsistentReturnedLength() {
+    @Test public void enforcesLocalBodyLimitBeforeAnyAllocation() {
+        byte[] header = new byte[] {0, 0, 0, 2, 0, 0, 4, 1}; // 1025 bytes
+        assertEquals(1025, AoaTransportHeaderProbe.decode(header, 8, 2048).bodyLength);
+        try {
+            AoaTransportHeaderProbe.decode(header, 8, 1024);
+            fail("expected local limit rejection");
+        } catch (IllegalArgumentException expected) {
+            assertTrue(expected.getMessage().contains("local limit"));
+        }
+    }
+
+    @Test public void rejectsInvalidLocalLimit() {
+        byte[] header = new byte[] {0, 0, 0, 2, 0, 0, 0, 1};
+        try {
+            AoaTransportHeaderProbe.decode(header, 8, 0);
+            fail("expected invalid local limit");
+        } catch (IllegalArgumentException expected) {
+            // expected
+        }
+    }
+
+    @Test public void requiresACompleteHeaderAccordingToReturnedLength() {
         byte[] data = new byte[16];
         assertFalse(AoaTransportHeaderProbe.isAvailable(null, 8));
         assertFalse(AoaTransportHeaderProbe.isAvailable(data, 7));
         assertFalse(AoaTransportHeaderProbe.isAvailable(new byte[7], 8));
-        assertFalse(AoaTransportHeaderProbe.isAvailable(new byte[8], 9));
+        assertFalse(AoaTransportHeaderProbe.isAvailable(data, 17));
         assertTrue(AoaTransportHeaderProbe.isAvailable(data, 8));
         try {
             AoaTransportHeaderProbe.decode(data, 7);
