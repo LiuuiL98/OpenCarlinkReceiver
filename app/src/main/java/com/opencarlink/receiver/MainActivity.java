@@ -70,6 +70,7 @@ public class MainActivity extends Activity {
 
     private void registerUsbReceiver() {
         IntentFilter filter = new IntentFilter(ACTION_USB_PERMISSION);
+        filter.addAction(ACTION_AOA_PERMISSION);
         if (Build.VERSION.SDK_INT >= 33) {
             registerReceiver(usbPermissionReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
         } else {
@@ -104,7 +105,7 @@ public class MainActivity extends Activity {
         root.addView(title, matchWrap());
 
         TextView subtitle = new TextView(this);
-        subtitle.setText("车机兼容性诊断工具 · 版本 0.1.3");
+        subtitle.setText("车机兼容性诊断工具 · 版本 0.1.4");
         subtitle.setTextColor(0xFFB7C5D3);
         subtitle.setTextSize(13);
         subtitle.setPadding(0, dp(6), 0, dp(18));
@@ -257,7 +258,7 @@ public class MainActivity extends Activity {
                     "OpenCarlinkReceiver",
                     "OpenCarlinkReceiver experimental AOA probe",
                     "Experimental AOA transport probe",
-                    "0.1.3",
+                    "0.1.4",
                     "https://github.com/LiuuiL98/OpenCarlinkReceiver",
                     "OCR-ANDROID-RECEIVER"
             };
