@@ -501,8 +501,7 @@ public class MainActivity extends Activity {
             return;
         }
         UsbDevice device = devices.values().iterator().next();
-        if (device.getVendorId() == 0x18D1 && (device.getProductId() == 0x2D00
-                || device.getProductId() == 0x2D01 || device.getProductId() == 0x2D04)) {
+        if (device.getVendorId() == AOA_VENDOR_ID && isAoaAccessoryProductId(device.getProductId())) {
             setUsbStatus("设备看起来已经处于 Google AOA 配件模式（18D1:2Dxx）。请刷新诊断信息；无需再次发送切换请求。");
             refreshDiagnostics();
             return;
@@ -526,12 +525,18 @@ public class MainActivity extends Activity {
         }
     }
 
+    private boolean isAoaAccessoryProductId(int productId) {
+        // AOA + accessory interface, optionally with ADB and/or AOA audio.
+        return productId == 0x2D00 || productId == 0x2D01
+                || productId == 0x2D04 || productId == 0x2D05;
+    }
+
     private UsbDevice findAoaDevice() {
         if (usbManager == null) return null;
         Map<String, UsbDevice> devices = usbManager.getDeviceList();
         if (devices == null) return null;
         for (UsbDevice device : devices.values()) {
-            if (device.getVendorId() == AOA_VENDOR_ID && device.getProductId() == AOA_PRODUCT_ID) {
+            if (device.getVendorId() == AOA_VENDOR_ID && isAoaAccessoryProductId(device.getProductId())) {
                 return device;
             }
         }
@@ -543,12 +548,13 @@ public class MainActivity extends Activity {
         recordEvent("AOA_BULK_IN", "开始只读 Bulk IN 测试。");
         UsbDevice device = findAoaDevice();
         if (device == null) {
-            setUsbStatus("未找到 AOA 配件设备 18D1:2D00。请先连接 S26，必要时执行 AOA 模式切换，再刷新诊断信息。");
+            setUsbStatus("未找到 AOA 配件接口（支持 18D1:2D00、2D01、2D04、2D05）。请先执行 AOA 模式切换，再刷新诊断信息。");
             refreshDiagnostics();
             return;
         }
         if (usbManager.hasPermission(device)) {
-            setUsbStatus("已拥有 18D1:2D00 的 USB 权限，开始只读 Bulk IN 测试……");
+            setUsbStatus("已拥有 AOA 配件 " + hex4(device.getVendorId()) + ":" + hex4(device.getProductId())
+                    + " 的 USB 权限，开始只读 Bulk IN 测试……");
             testAoaBulkRead(device);
             refreshDiagnostics();
             return;
@@ -559,7 +565,8 @@ public class MainActivity extends Activity {
             int flags = PendingIntent.FLAG_UPDATE_CURRENT;
             if (Build.VERSION.SDK_INT >= 31) flags |= PendingIntent.FLAG_MUTABLE;
             PendingIntent permissionIntent = PendingIntent.getBroadcast(this, 2, intent, flags);
-            setUsbStatus("正在单独申请 AOA 配件 18D1:2D00 的 USB 权限。授权后只进行 Bulk IN 读取，不会向设备写入数据。若系统已授权，点击按钮会直接开始测试。");
+            setUsbStatus("正在申请 AOA 配件 " + hex4(device.getVendorId()) + ":" + hex4(device.getProductId())
+                    + " 的 USB 权限。只进行 Bulk IN 读取，不向设备写入业务数据。");
             usbManager.requestPermission(device, permissionIntent);
         } catch (Exception e) {
             setUsbStatus("申请 AOA 配件权限失败：" + e.getClass().getSimpleName() + "：" + safeMessage(e));
@@ -703,23 +710,27 @@ public class MainActivity extends Activity {
             };
             for (int i = 0; i < identity.length; i++) {
                 byte[] encoded = identity[i].getBytes("UTF-8");
-                if (encoded.length > 255) {
-                    setUsbStatus("AOA 身份字段 " + i + " 超过 255 字节，已中止切换。请缩短内容后重试。");
+                if (encoded.length >= 255) {
+                    setUsbStatus("AOA 身份字段 " + i + " 加上必需的 NUL 结束符后将超过 255 字节，已中止切换。请缩短内容后重试。");
                     return;
                 }
             }
             for (int i = 0; i < identity.length; i++) {
                 byte[] value = identity[i].getBytes("UTF-8");
+                // AOA request 52 strings are NUL-terminated UTF-8 according to the AOA specification.
+                byte[] terminatedValue = java.util.Arrays.copyOf(value, value.length + 1);
                 int sent = connection.controlTransfer(
                         UsbConstants.USB_DIR_OUT | UsbConstants.USB_TYPE_VENDOR,
-                        52, 0, i, value, value.length, 2000);
-                if (sent != value.length) {
-                    recordEvent("AOA_IDENTITY", "字段 index=" + i + " 发送失败：返回=" + sent + "，预期=" + value.length + " 字节；字段原文未记录。");
+                        52, 0, i, terminatedValue, terminatedValue.length, 2000);
+                if (sent != terminatedValue.length) {
+                    recordEvent("AOA_IDENTITY", "字段 index=" + i + " 发送失败：返回=" + sent + "，预期=" + terminatedValue.length
+                            + " 字节（含 NUL 结束符）；字段原文未记录。");
                     setUsbStatus("AOA 握手中止：AOA 版本 " + aoaVersion + "，发送身份字符串 index=" + i
-                            + " 失败（返回 " + sent + "，预期 " + value.length + "）。未请求切换模式。");
+                            + " 失败（返回 " + sent + "，预期 " + terminatedValue.length + "）。未请求切换模式。");
                     return;
                 }
-                recordEvent("AOA_IDENTITY", "字段 index=" + i + " 发送成功，UTF-8 字节数=" + value.length + "；字段原文未记录。");
+                recordEvent("AOA_IDENTITY", "字段 index=" + i + " 发送成功，UTF-8 内容字节数=" + value.length
+                        + "，控制传输字节数=" + terminatedValue.length + "（含 NUL 结束符）；字段原文未记录。");
             }
             int startResult = connection.controlTransfer(
                     UsbConstants.USB_DIR_OUT | UsbConstants.USB_TYPE_VENDOR,
@@ -920,7 +931,7 @@ public class MainActivity extends Activity {
         out.append("\n【USB 测试说明】\n");
         out.append("“申请 USB 权限并测试打开连接”仅打开并关闭设备，不声明接口或传输数据。\n");
         out.append("“尝试 AOA 模式切换”会执行标准 AOA 请求 51/52/53，并可能让对端 USB 重新枚举。\n");
-        out.append("“申请 AOA 设备权限并测试接收”仅对 18D1:2D00 声明接口并限时读取 Bulk IN；若收到数据，会显示最多约 512 字节 HEX 样本；不向 Bulk OUT 写入数据。\n");
+        out.append("“申请 AOA 设备权限并测试接收”支持 18D1:2D00/2D01/2D04/2D05，并限时读取第一个带 Bulk IN 的接口；2D01 的第二接口为 ADB，不用于 ICCOA 数据。若收到数据，会显示最多约 512 字节 HEX 样本；导出日志会省略 HEX 样本。\n");
         out.append("官方 APK 静态检查发现 AOA 连接管理、消息头解析、ProtocolParser、CRC16、认证/证书协议和多个 channel ID 相关组件；具体帧字段和消息编号仍需从字节码进一步确认。\n");
         out.append("AOA 模式及只读接收结果均不能单独证明 ICCOA 业务协议已实现。\n");
         diagnostics.setText(out.toString());
