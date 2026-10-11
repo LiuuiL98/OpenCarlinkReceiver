@@ -38,9 +38,11 @@ This establishes exact-length behavior at the Java helper boundary. It does not 
 
 `AoaTransportRecordDecoder` is a separate, incremental utility. It can accept split headers/bodies and multiple records in one input range. It enforces a configurable local body-length cap before allocating the body buffer; the default is 1 MiB rather than the official code's 64 MiB maximum. It models the observed wire read length `max(declaredLength, 8)`, while exposing only the declared logical body bytes to callers. It supports reset after disconnect/error.
 
-This decoder is **not connected to the raw USB Bulk IN path**. The diagnostic currently reads a header-sized transfer and subsequent body reads through the Android USB API; integrating a stream decoder there without changing that I/O model could double-frame or desynchronize the stream. First validate the USB helper contract and real captures.
+`AoaCreateSocketMessage.parse(...)` now decodes the create-socket payload fields recovered from the official DEX: 32-bit big-endian values at offsets 0 and 4, followed by unsigned type bytes at offsets 8 and 9. It rejects payloads shorter than 10 bytes and rejects declared lengths that exceed the available backing array. The type bytes remain unnamed semantically, and this parser does not open sockets.
 
-Unit tests cover split headers and bodies, multiple records in one input range, create-socket discriminator handling, the short-body 8-byte wire-read behavior, invalid ranges, over-cap lengths, and reset after partial input.
+These pure-Java utilities are **not connected to the raw USB Bulk IN path**. The diagnostic reads a header-sized transfer and subsequent body reads through the Android USB API; integrating a stream decoder there without changing that I/O model could double-frame or desynchronize the stream. First validate the USB helper contract and real captures.
+
+Unit tests cover split headers and bodies, multiple records in one input range, create-socket discriminator handling, short-body 8-byte wire-read behavior, invalid ranges, over-cap lengths, reset after partial input, create-socket minimum length, big-endian fields and unsigned trailing bytes.
 
 ## Important safety boundary
 
@@ -50,6 +52,7 @@ Do not pass raw Bulk IN bytes directly to the UCar 20-byte message parser. No ou
 
 ## Next gate
 
-1. Inspect `handleCreateSocket(byte[], int)` instruction by instruction and confirm the record minimum and field offsets.
-2. Validate the local cap against realistic read-only captures; increase it only with evidence.
-3. Review decoder tests and CI before considering any transport integration.
+1. Run CI for the header, record and create-socket parser tests.
+2. Inspect `handleCreateSocket(byte[], int)` for any extra branch constraints before using these fields in a runtime transport.
+3. Validate the 1 MiB local cap against realistic read-only captures; increase it only with evidence.
+4. Keep the new parsers isolated until transport ownership and the USB helper's read model are reconciled.
