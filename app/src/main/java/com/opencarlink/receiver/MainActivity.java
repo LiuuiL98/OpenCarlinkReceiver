@@ -7,7 +7,6 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.pm.PackageManager;
-import android.hardware.usb.UsbAccessory;
 import android.hardware.usb.UsbConstants;
 import android.hardware.usb.UsbDevice;
 import android.hardware.usb.UsbDeviceConnection;
@@ -19,7 +18,6 @@ import android.media.MediaCodecList;
 import android.net.wifi.WifiManager;
 import android.os.Build;
 import android.os.Bundle;
-import android.os.ParcelFileDescriptor;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
@@ -29,8 +27,6 @@ import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 
-import java.io.FileInputStream;
-import java.io.IOException;
 import java.util.Locale;
 import java.util.Map;
 
@@ -38,23 +34,15 @@ public class MainActivity extends Activity {
     private static final String ACTION_USB_PERMISSION = "com.opencarlink.receiver.USB_PERMISSION";
     private static final String ACTION_AOA_PERMISSION = "com.opencarlink.receiver.AOA_PERMISSION";
     private static final String ACTION_AOA_DATA_PERMISSION = "com.opencarlink.receiver.AOA_DATA_PERMISSION";
-    private static final String ACTION_ACCESSORY_PERMISSION = "com.opencarlink.receiver.ACCESSORY_PERMISSION";
     private static final int AOA_VENDOR_ID = 0x18D1;
     private static final int AOA_PRODUCT_ID = 0x2D00;
     private LinearLayout root;
     private TextView diagnostics;
     private TextView usbTestStatus;
-    private EditText aoaManufacturerInput, aoaModelInput, aoaDescriptionInput, aoaVersionInput, aoaUriInput, aoaSerialInput;
+    private EditText aoaManufacturerInput, aoaModelInput, aoaDescriptionInput, aoaVersionInput, aoaUriInput;
+    private EditText carModIdInput, carIdInput, carShortNameInput, usbPinCodeInput, carProtocolVersionInput, carVendorDataInput;
     private UsbManager usbManager;
     private boolean receiverRegistered;
-    private boolean accessoryReceiverRegistered;
-    private UsbAccessory activeAccessory;
-    private ParcelFileDescriptor accessoryParcelFileDescriptor;
-    private FileInputStream accessoryInputStream;
-    private volatile boolean stopAccessoryRead = true;
-    private volatile long accessoryBytesReceived;
-    private volatile String accessorySampleHex = "";
-    private volatile String accessoryStatus = "尚未检测到 USB 配件连接。建议由 S25 官方 ICCOA CarLink 应用主动发起 AOA。";
     private final BroadcastReceiver usbPermissionReceiver = new BroadcastReceiver() {
         @Override public void onReceive(Context context, Intent intent) {
             String action = intent.getAction();
@@ -80,31 +68,13 @@ public class MainActivity extends Activity {
         }
     };
 
-    private final BroadcastReceiver accessoryPermissionReceiver = new BroadcastReceiver() {
-        @Override public void onReceive(Context context, Intent intent) {
-            if (!ACTION_ACCESSORY_PERMISSION.equals(intent.getAction())) return;
-            UsbAccessory accessory = intent.getParcelableExtra(UsbManager.EXTRA_ACCESSORY);
-            boolean granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false);
-            if (accessory == null) {
-                setUsbStatus("USB 配件授权结果异常：系统未返回 UsbAccessory。");
-            } else if (!granted) {
-                setUsbStatus("未获得 USB 配件访问权限。请再次点击“检测/打开 ICCOA AOA 配件连接”。");
-            } else {
-                openAccessoryRead(accessory);
-            }
-            refreshDiagnostics();
-        }
-    };
-
     @Override
     public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         usbManager = (UsbManager) getSystemService(Context.USB_SERVICE);
         registerUsbReceiver();
-        registerAccessoryPermissionReceiver();
         buildUi();
         refreshDiagnostics();
-        handleUsbAccessoryIntent(getIntent());
     }
 
     private void registerUsbReceiver() {
@@ -120,19 +90,7 @@ public class MainActivity extends Activity {
     }
 
     @Override
-    protected void onNewIntent(Intent intent) {
-        super.onNewIntent(intent);
-        setIntent(intent);
-        handleUsbAccessoryIntent(intent);
-    }
-
-    @Override
     protected void onDestroy() {
-        closeAccessoryConnection();
-        if (accessoryReceiverRegistered) {
-            try { unregisterReceiver(accessoryPermissionReceiver); } catch (IllegalArgumentException ignored) { }
-            accessoryReceiverRegistered = false;
-        }
         if (receiverRegistered) {
             try { unregisterReceiver(usbPermissionReceiver); } catch (IllegalArgumentException ignored) { }
             receiverRegistered = false;
@@ -157,7 +115,7 @@ public class MainActivity extends Activity {
         root.addView(title, matchWrap());
 
         TextView subtitle = new TextView(this);
-        subtitle.setText("车机兼容性诊断工具 · 版本 0.2.0");
+        subtitle.setText("车机兼容性诊断工具 · 版本 0.2.1");
         subtitle.setTextColor(0xFFB7C5D3);
         subtitle.setTextSize(13);
         subtitle.setPadding(0, dp(6), 0, dp(18));
@@ -170,21 +128,6 @@ public class MainActivity extends Activity {
         });
         root.addView(refresh, matchWrap());
 
-        Button accessoryButton = new Button(this);
-        accessoryButton.setText("检测/打开 ICCOA AOA 配件连接（推荐方向）");
-        accessoryButton.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View v) { probeAccessoryMode(); }
-        });
-        LinearLayout.LayoutParams accessoryButtonParams = matchWrap();
-        accessoryButtonParams.topMargin = dp(8);
-        root.addView(accessoryButton, accessoryButtonParams);
-        TextView accessoryHint = new TextView(this);
-        accessoryHint.setText("新版接收方向：由 S25 官方 ICCOA CarLink 应用作为 USB Host 发起 AOA，S9+ 以 USB 配件模式接收。测试时不要先点击下面的旧版“尝试 AOA 模式切换”。");
-        accessoryHint.setTextColor(0xFFFFD166);
-        accessoryHint.setTextSize(12);
-        accessoryHint.setPadding(0, dp(4), 0, dp(6));
-        root.addView(accessoryHint, matchWrap());
-
         Button usbTest = new Button(this);
         usbTest.setText("申请 USB 权限并测试打开连接");
         usbTest.setOnClickListener(new View.OnClickListener() {
@@ -195,7 +138,7 @@ public class MainActivity extends Activity {
         root.addView(usbTest, buttonParams);
 
         Button aoaButton = new Button(this);
-        aoaButton.setText("旧版反向 AOA 模式切换（不用于推荐流程）");
+        aoaButton.setText("发送 ICCOA AOA 身份并切换手机模式");
         aoaButton.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) { requestUsbPermissionAndStartAoa(); }
         });
@@ -205,13 +148,13 @@ public class MainActivity extends Activity {
 
 
         TextView identityTitle = new TextView(this);
-        identityTitle.setText("旧版反向 AOA 身份（仅供对照测试）");
+        identityTitle.setText("AOA 配件身份（匹配三星手机端）");
         identityTitle.setTextColor(0xFFFFFFFF);
         identityTitle.setTextSize(16);
         identityTitle.setPadding(0, dp(12), 0, dp(4));
         root.addView(identityTitle, matchWrap());
         TextView identityHint = new TextView(this);
-        identityHint.setText("这些字段只在本机主动向对端发送 AOA 请求时使用；官方 ICCOA APK 的连接流程提示我们应优先测试相反方向。建议保持本页不动，改为在 S25 上主动发起连接。");
+        identityHint.setText("已从三星车联 APK 确认手机端过滤条件为 ICCOA / CarLink / 1.0.0。第 6 项序列号并非普通文本：手机端会按 6 段分号分隔字段解析。下方使用的是测试占位值，不是官方车机标识或真实配对码。");
         identityHint.setTextColor(0xFFFFD166);
         identityHint.setTextSize(12);
         root.addView(identityHint, matchWrap());
@@ -220,7 +163,12 @@ public class MainActivity extends Activity {
         aoaDescriptionInput = addAoaInput("描述（description）", "ICCOA CarLink");
         aoaVersionInput = addAoaInput("版本（version）", "1.0.0");
         aoaUriInput = addAoaInput("说明网址（URI）", "http://www.iccoa.cn/");
-        aoaSerialInput = addAoaInput("序列号（serial）", "OCR-ANDROID-RECEIVER");
+        carModIdInput = addAoaInput("车机型号标识（mod_id，最多 12 字符）", "OCRMODEL0001");
+        carIdInput = addAoaInput("车机标识（car_id，最多 8 字符）", "OCRID001");
+        carShortNameInput = addAoaInput("车机简称（car_short_name，最多 16 个 UTF-8 字节）", "OpenCarlink");
+        usbPinCodeInput = addAoaInput("USB 连接码（usb_pin_code，最多 16 字符）", "123456");
+        carProtocolVersionInput = addAoaInput("协议版本（protocol_version）", "1.5");
+        carVendorDataInput = addAoaInput("厂商自定义数据（car_vendor_custom_data，最多 16 字符）", "OpenCarlink");
         Button resetIdentity = new Button(this);
         resetIdentity.setText("恢复默认 AOA 身份");
         resetIdentity.setOnClickListener(new View.OnClickListener() {
@@ -230,14 +178,19 @@ public class MainActivity extends Activity {
                 aoaDescriptionInput.setText("ICCOA CarLink");
                 aoaVersionInput.setText("1.0.0");
                 aoaUriInput.setText("http://www.iccoa.cn/");
-                aoaSerialInput.setText("OCR-ANDROID-RECEIVER");
-                setUsbStatus("已恢复从官方 APK 确认的 AOA 身份字段；序列号仍为本项目测试值。该操作只用于匹配测试，不代表 ICCOA 协议已连接。");
+                carModIdInput.setText("OCRMODEL0001");
+                carIdInput.setText("OCRID001");
+                carShortNameInput.setText("OpenCarlink");
+                usbPinCodeInput.setText("123456");
+                carProtocolVersionInput.setText("1.5");
+                carVendorDataInput.setText("OpenCarlink");
+                setUsbStatus("已恢复官方 USB 配件匹配字段，并重置为本项目自拟的 6 段测试前导信息；这些车机 ID/连接码不是官方值。");
             }
         });
         root.addView(resetIdentity, matchWrap());
 
         Button aoaReadButton = new Button(this);
-        aoaReadButton.setText("旧版反向 AOA Bulk IN 测试（仅供对照）");
+        aoaReadButton.setText("申请 AOA 设备权限并测试接收");
         aoaReadButton.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) { requestAoaDataPermission(); }
         });
@@ -246,7 +199,7 @@ public class MainActivity extends Activity {
         root.addView(aoaReadButton, aoaReadParams);
 
         TextView aoaWarning = new TextView(this);
-        aoaWarning.setText("注意：此处两个旧版按钮会让 S9+ 主动操作 S25 的 USB 模式，可能导致重新枚举或断开调试。推荐流程应由 S25 官方 ICCOA 应用发起 AOA，S9+ 通过 UsbAccessory 接口接收。");
+        aoaWarning.setText("注意：AOA 会向连接的 Android 设备发送标准 USB 控制请求，并可能导致对端 USB 重新枚举、断开当前调试连接。仅在你明确要测试时点击；此功能不发送 ICCOA 业务数据。");
         aoaWarning.setTextColor(0xFFFFD166);
         aoaWarning.setTextSize(12);
         aoaWarning.setPadding(0, dp(4), 0, dp(4));
@@ -291,177 +244,6 @@ public class MainActivity extends Activity {
         input.setPadding(dp(8), dp(4), dp(8), dp(4));
         root.addView(input, matchWrap());
         return input;
-    }
-
-    private void registerAccessoryPermissionReceiver() {
-        IntentFilter filter = new IntentFilter(ACTION_ACCESSORY_PERMISSION);
-        if (Build.VERSION.SDK_INT >= 33) {
-            registerReceiver(accessoryPermissionReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
-        } else {
-            registerReceiver(accessoryPermissionReceiver, filter);
-        }
-        accessoryReceiverRegistered = true;
-    }
-
-    private void handleUsbAccessoryIntent(Intent intent) {
-        if (intent != null && UsbManager.ACTION_USB_ACCESSORY_ATTACHED.equals(intent.getAction())) {
-            UsbAccessory accessory = intent.getParcelableExtra(UsbManager.EXTRA_ACCESSORY);
-            if (accessory != null) {
-                accessoryStatus = "系统通过 USB_ACCESSORY_ATTACHED 启动了本应用；正在申请配件访问权限。";
-                requestAccessoryPermission(accessory);
-            } else {
-                probeAccessoryMode();
-            }
-        } else {
-            UsbAccessory[] accessories = usbManager == null ? null : usbManager.getAccessoryList();
-            if (accessories != null && accessories.length > 0) {
-                accessoryStatus = "已检测到 USB 配件。点击顶部按钮打开只读接收通道。";
-            }
-        }
-        refreshDiagnostics();
-    }
-
-    private void probeAccessoryMode() {
-        UsbAccessory[] accessories = usbManager == null ? null : usbManager.getAccessoryList();
-        if (accessories == null || accessories.length == 0) {
-            accessoryStatus = "未检测到 UsbAccessory。请在 S25 打开官方 ICCOA CarLink 并主动发起连接；不要先使用本应用的旧版反向 AOA 按钮。";
-            setUsbStatus(accessoryStatus);
-            refreshDiagnostics();
-            return;
-        }
-        requestAccessoryPermission(accessories[0]);
-    }
-
-    private void requestAccessoryPermission(UsbAccessory accessory) {
-        if (usbManager == null || accessory == null) {
-            setUsbStatus("USB 配件服务或设备信息不可用。");
-            return;
-        }
-        if (usbManager.hasPermission(accessory)) {
-            openAccessoryRead(accessory);
-            return;
-        }
-        try {
-            Intent intent = new Intent(ACTION_ACCESSORY_PERMISSION);
-            intent.setPackage(getPackageName());
-            int flags = PendingIntent.FLAG_UPDATE_CURRENT;
-            if (Build.VERSION.SDK_INT >= 31) flags |= PendingIntent.FLAG_MUTABLE;
-            PendingIntent permissionIntent = PendingIntent.getBroadcast(this, 3, intent, flags);
-            accessoryStatus = "已请求 USB 配件访问权限，请在系统提示中允许。";
-            usbManager.requestPermission(accessory, permissionIntent);
-            setUsbStatus(accessoryStatus);
-        } catch (Exception e) {
-            accessoryStatus = "请求 USB 配件权限失败：" + e.getClass().getSimpleName() + "：" + safeMessage(e);
-            setUsbStatus(accessoryStatus);
-        }
-        refreshDiagnostics();
-    }
-
-    private void openAccessoryRead(final UsbAccessory accessory) {
-        synchronized (this) {
-            if (accessoryParcelFileDescriptor != null && accessory.equals(activeAccessory)) {
-                accessoryStatus = "USB 配件读取通道已经打开。";
-                setUsbStatus(accessoryStatus + " 已接收 " + accessoryBytesReceived + " 字节。");
-                refreshDiagnostics();
-                return;
-            }
-        }
-        closeAccessoryConnection();
-        ParcelFileDescriptor descriptor = null;
-        FileInputStream input = null;
-        try {
-            descriptor = usbManager.openAccessory(accessory);
-            if (descriptor == null) {
-                accessoryStatus = "UsbManager.openAccessory() 返回空；请确认配件权限及 USB 连接状态。";
-                setUsbStatus(accessoryStatus);
-                refreshDiagnostics();
-                return;
-            }
-            input = new FileInputStream(descriptor.getFileDescriptor());
-            synchronized (this) {
-                activeAccessory = accessory;
-                accessoryParcelFileDescriptor = descriptor;
-                accessoryInputStream = input;
-                stopAccessoryRead = false;
-                accessoryBytesReceived = 0;
-                accessorySampleHex = "";
-                accessoryStatus = "已打开 USB 配件输入流，正在等待 S25 发送 ICCOA 数据。当前仅读不写。";
-            }
-            setUsbStatus(accessoryStatus);
-            refreshDiagnostics();
-            final FileInputStream stream = input;
-            Thread reader = new Thread(new Runnable() {
-                @Override public void run() {
-                    byte[] buffer = new byte[4096];
-                    try {
-                        while (!stopAccessoryRead) {
-                            int count = stream.read(buffer);
-                            if (count < 0) break;
-                            if (count == 0) continue;
-                            synchronized (MainActivity.this) {
-                                accessoryBytesReceived += count;
-                                StringBuilder hex = new StringBuilder();
-                                int take = Math.min(count, Math.max(0, 512 - accessorySampleHex.length() / 3));
-                                for (int i = 0; i < take; i++) {
-                                    if (accessorySampleHex.length() > 0 || hex.length() > 0) hex.append(' ');
-                                    hex.append(String.format(Locale.US, "%02X", buffer[i] & 0xFF));
-                                }
-                                if (hex.length() > 0) {
-                                    accessorySampleHex = accessorySampleHex.length() == 0
-                                            ? hex.toString() : accessorySampleHex + " " + hex.toString();
-                                }
-                                accessoryStatus = "USB 配件输入流正在接收数据；本次 +" + count
-                                        + " 字节，累计 " + accessoryBytesReceived + " 字节。";
-                            }
-                            runOnUiThread(new Runnable() {
-                                @Override public void run() {
-                                    setUsbStatus(accessoryStatus);
-                                    refreshDiagnostics();
-                                }
-                            });
-                        }
-                    } catch (IOException e) {
-                        if (!stopAccessoryRead) {
-                            accessoryStatus = "USB 配件读取结束：" + e.getClass().getSimpleName() + "：" + safeMessage(e);
-                        }
-                    } finally {
-                        if (!stopAccessoryRead) {
-                            runOnUiThread(new Runnable() {
-                                @Override public void run() {
-                                    setUsbStatus(accessoryStatus);
-                                    refreshDiagnostics();
-                                }
-                            });
-                        }
-                    }
-                }
-            }, "ICCOA-UsbAccessory-Read");
-            reader.setDaemon(true);
-            reader.start();
-        } catch (Exception e) {
-            if (input != null) try { input.close(); } catch (IOException ignored) { }
-            if (descriptor != null) try { descriptor.close(); } catch (IOException ignored) { }
-            accessoryStatus = "打开 USB 配件失败：" + e.getClass().getSimpleName() + "：" + safeMessage(e);
-            setUsbStatus(accessoryStatus);
-            refreshDiagnostics();
-        }
-    }
-
-    private synchronized void closeAccessoryConnection() {
-        stopAccessoryRead = true;
-        if (accessoryInputStream != null) {
-            try { accessoryInputStream.close(); } catch (IOException ignored) { }
-            accessoryInputStream = null;
-        }
-        if (accessoryParcelFileDescriptor != null) {
-            try { accessoryParcelFileDescriptor.close(); } catch (IOException ignored) { }
-            accessoryParcelFileDescriptor = null;
-        }
-        activeAccessory = null;
-    }
-
-    private String nullToUnknown(String value) {
-        return value == null || value.length() == 0 ? "（未提供）" : value;
     }
 
     private void requestUsbPermissionAndTest() {
@@ -686,13 +468,20 @@ public class MainActivity extends Activity {
                 return;
             }
 
+            final String serialPreamble;
+            try {
+                serialPreamble = buildAoaSerialNumber();
+            } catch (IllegalArgumentException invalid) {
+                setUsbStatus("AOA 前导信息无效：" + invalid.getMessage() + "。尚未请求切换模式。");
+                return;
+            }
             final String[] identity = new String[] {
                     aoaManufacturerInput == null ? "ICCOA" : aoaManufacturerInput.getText().toString().trim(),
                     aoaModelInput == null ? "CarLink" : aoaModelInput.getText().toString().trim(),
                     aoaDescriptionInput == null ? "ICCOA CarLink" : aoaDescriptionInput.getText().toString().trim(),
                     aoaVersionInput == null ? "1.0.0" : aoaVersionInput.getText().toString().trim(),
                     aoaUriInput == null ? "http://www.iccoa.cn/" : aoaUriInput.getText().toString().trim(),
-                    aoaSerialInput == null ? "OCR-ANDROID-RECEIVER" : aoaSerialInput.getText().toString().trim()
+                    serialPreamble
             };
             for (int i = 0; i < identity.length; i++) {
                 byte[] encoded = identity[i].getBytes("UTF-8");
@@ -702,7 +491,7 @@ public class MainActivity extends Activity {
                 }
             }
             for (int i = 0; i < identity.length; i++) {
-                byte[] value = (identity[i] + "\0").getBytes("UTF-8");
+                byte[] value = identity[i].getBytes("UTF-8");
                 int sent = connection.controlTransfer(
                         UsbConstants.USB_DIR_OUT | UsbConstants.USB_TYPE_VENDOR,
                         52, 0, i, value, value.length, 2000);
@@ -718,7 +507,7 @@ public class MainActivity extends Activity {
             if (startResult < 0) {
                 setUsbStatus("AOA 版本 " + aoaVersion + "：身份字符串已发送，但 START_ACCESSORY_MODE 请求失败（" + startResult + "）。请刷新诊断信息。");
             } else {
-                setUsbStatus("AOA 版本 " + aoaVersion + "：已发送 START_ACCESSORY_MODE 请求。对端可能会断开并重新枚举；请等待数秒后点击“刷新诊断信息”。本步骤尚未实现 ICCOA 数据协议。");
+                setUsbStatus("AOA 版本 " + aoaVersion + "：已发送官方 ICCOA 匹配字段和 6 段 AOA 序列号前导信息，并请求 START_ACCESSORY_MODE。前导格式=mod_id;car_id;car_short_name;usb_pin_code;protocol_version;car_vendor_custom_data。测试 ID/连接码是占位值；请等待手机重新枚举并观察是否启动三星车联。此步骤仍未实现 ICCOA 业务协议。");
             }
         } catch (Exception e) {
             setUsbStatus("AOA 握手异常：" + e.getClass().getSimpleName() + "：" + safeMessage(e));
@@ -726,6 +515,78 @@ public class MainActivity extends Activity {
             if (connection != null) {
                 try { connection.close(); } catch (Exception ignored) { }
             }
+        }
+    }
+
+    /**
+     * Builds AOA_SERIAL_NUMBER in the six-part format found in the official ICCOA APK:
+     * mod_id;car_id;car_short_name;usb_pin_code;protocol_version;car_vendor_custom_data.
+     * Values shown in the UI are diagnostic placeholders, not OEM provisioning data.
+     */
+    private String buildAoaSerialNumber() {
+        String modId = encodeGenericField("mod_id", carModIdInput, 12);
+        String carId = encodeGenericField("car_id", carIdInput, 8);
+        String shortName = encodeCarShortName(carShortNameInput == null ? "" : carShortNameInput.getText().toString().trim());
+        String pin = encodeGenericField("usb_pin_code", usbPinCodeInput, 16);
+        String protocol = encodeProtocolVersion(carProtocolVersionInput == null ? "" : carProtocolVersionInput.getText().toString().trim());
+        String vendorData = encodeGenericField("car_vendor_custom_data", carVendorDataInput, 16);
+        return String.format(Locale.US, "%s;%s;%s;%s;%s;%s",
+                modId, carId, shortName, pin, protocol, vendorData);
+    }
+
+    private String encodeGenericField(String fieldName, EditText input, int maxChars) {
+        String value = input == null ? "" : input.getText().toString().trim();
+        if (value.length() == 0) {
+            throw new IllegalArgumentException(fieldName + " 不能为空");
+        }
+        if (value.indexOf(';') >= 0 || value.indexOf('\0') >= 0) {
+            throw new IllegalArgumentException(fieldName + " 不能包含分号或 NUL 字符");
+        }
+        // Mirrors the official builder's substring cap for generic string fields.
+        return value.length() > maxChars ? value.substring(0, maxChars) : value;
+    }
+
+    private String encodeCarShortName(String value) {
+        if (value.length() == 0) {
+            throw new IllegalArgumentException("car_short_name 不能为空");
+        }
+        if (value.indexOf(';') >= 0 || value.indexOf('\0') >= 0) {
+            throw new IllegalArgumentException("car_short_name 不能包含分号或 NUL 字符");
+        }
+        if (value.getBytes(java.nio.charset.StandardCharsets.UTF_8).length <= 16) return value;
+        StringBuilder prefix = new StringBuilder();
+        int bytes = 0;
+        for (int offset = 0; offset < value.length();) {
+            int codePoint = value.codePointAt(offset);
+            String unit = new String(Character.toChars(codePoint));
+            int unitBytes = unit.getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
+            // The official format reserves three UTF-8 bytes for the ellipsis when truncating.
+            if (bytes + unitBytes > 13) break;
+            prefix.append(unit);
+            bytes += unitBytes;
+            offset += Character.charCount(codePoint);
+        }
+        return prefix.append("…").toString();
+    }
+
+    private String encodeProtocolVersion(String value) {
+        if (value.length() == 0 || value.indexOf(';') >= 0) {
+            throw new IllegalArgumentException("protocol_version 不能为空且不能包含分号");
+        }
+        String[] parts = value.split("\\.");
+        if (parts.length < 2) {
+            throw new IllegalArgumentException("protocol_version 请按 major.minor 填写，例如 1.5");
+        }
+        try {
+            int major = Integer.parseInt(parts[0]);
+            int minor = Integer.parseInt(parts[1]);
+            if (major < 0 || major > 255 || minor < 0 || minor > 255) {
+                throw new IllegalArgumentException("协议版本的 major/minor 必须在 0 到 255 之间");
+            }
+            // The official builder serializes the first two numeric components as major.minor.
+            return String.format(Locale.US, "%d.%d", major, minor);
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException("protocol_version 需要是数字版本，例如 1.5");
         }
     }
 
@@ -776,29 +637,7 @@ public class MainActivity extends Activity {
         } else {
             out.append(Build.CPU_ABI);
         }
-        out.append("\n\n【USB 配件接收模式（新版推荐方向）】\n");
-        UsbAccessory[] accessories = usbManager == null ? null : usbManager.getAccessoryList();
-        if (accessories == null || accessories.length == 0) {
-            out.append("当前未检测到 UsbAccessory。请保持数据线连接，并在 S25 官方 ICCOA CarLink 应用中主动发起连接；本机不应先发送 AOA 请求。\n");
-        } else {
-            out.append("检测到 USB 配件数量：").append(accessories.length).append("\n");
-            for (UsbAccessory accessory : accessories) {
-                out.append("制造商：").append(nullToUnknown(accessory.getManufacturer())).append("\n");
-                out.append("型号：").append(nullToUnknown(accessory.getModel())).append("\n");
-                out.append("描述：").append(nullToUnknown(accessory.getDescription())).append("\n");
-                out.append("版本：").append(nullToUnknown(accessory.getVersion())).append("\n");
-                out.append("URI：").append(nullToUnknown(accessory.getUri())).append("\n");
-                if (Build.VERSION.SDK_INT >= 21) {
-                    try { out.append("序列号：").append(nullToUnknown(accessory.getSerial())).append("\n"); }
-                    catch (SecurityException e) { out.append("序列号：系统未授权读取\n"); }
-                }
-                out.append("本应用已获配件访问权限：").append(usbManager.hasPermission(accessory) ? "是" : "否").append("\n");
-            }
-        }
-        out.append("配件读取状态：").append(accessoryStatus).append("\n");
-        out.append("配件接收累计字节：").append(accessoryBytesReceived).append("\n");
-        if (accessorySampleHex.length() > 0) out.append("配件首批 HEX 样本：").append(accessorySampleHex).append("\n");
-        out.append("\n【USB 主机诊断（旧版反向测试）】\n");
+        out.append("\n\n【USB 连接】\n");
         boolean usbHost = getPackageManager().hasSystemFeature(PackageManager.FEATURE_USB_HOST);
         out.append("USB 主机功能：").append(usbHost ? "支持" : "系统未报告").append("\n");
         Map<String, UsbDevice> devices = usbManager == null ? null : usbManager.getDeviceList();
@@ -854,8 +693,7 @@ public class MainActivity extends Activity {
 
         out.append("\n【USB 测试说明】\n");
         out.append("“申请 USB 权限并测试打开连接”仅打开并关闭设备，不声明接口或传输数据。\n");
-        out.append("“检测/打开 ICCOA AOA 配件连接”使用 Android UsbAccessory API，等待 S25 主动发起 AOA；这是当前推荐测试方向。\n");
-        out.append("“旧版反向 AOA 模式切换”会由 S9+ 向 S25 发送标准 AOA 请求 51/52/53，仅保留作对照，不是推荐 ICCOA 连接流程。\n");
+        out.append("“尝试 AOA 模式切换”会执行标准 AOA 请求 51/52/53，并可能让对端 USB 重新枚举。\n");
         out.append("“申请 AOA 设备权限并测试接收”仅对 18D1:2D00 声明接口并限时读取 Bulk IN；若收到数据，会显示最多约 512 字节 HEX 样本；不向 Bulk OUT 写入数据。\n");
         out.append("官方 APK 静态检查发现 AOA 连接管理、消息头解析、ProtocolParser、CRC16、认证/证书协议和多个 channel ID 相关组件；具体帧字段和消息编号仍需从字节码进一步确认。\n");
         out.append("AOA 模式及只读接收结果均不能单独证明 ICCOA 业务协议已实现。\n");
