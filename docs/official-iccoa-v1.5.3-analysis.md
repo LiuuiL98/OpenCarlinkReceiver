@@ -198,3 +198,12 @@ Before adding a parser to the app, it must:
 6. never transmit a response or guessed command as part of parser tests.
 
 This capture is the gating item for a safe implementation. The current evidence is sufficient to describe the official read sequence, but not enough to write a compatible body-length parser or send business messages.
+
+
+## 11. Read-only transport-header probe in the diagnostic build
+
+The diagnostic UI now records the requested Bulk IN buffer length separately from the actual returned byte count. For reads of at least eight bytes, it also records the first eight raw bytes and both big-endian and little-endian interpretations of the two 32-bit words.
+
+This is deliberately a probe, not a decoder: the output does not label either word as a length, channel ID, or command, and it does not allocate a body buffer or transmit any response. The official read-thread structure supports investigating an eight-byte prefix, but the available evidence still does not establish the prefix's byte order or length formula.
+
+After collecting a new trace, compare the two candidate interpretations across several consecutive reads and correlate them with the official receiver's first-header/body-read sequence. Do not choose an interpretation from one sample alone.
