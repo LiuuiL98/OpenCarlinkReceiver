@@ -589,3 +589,55 @@ The read loop has a `ProtocolException` handling path that logs the failure and 
 - Decode the `fillBuffer` loop's branch targets to document EOF, zero-byte reads, and retry behavior.
 - Confirm whether `SocketChannelReadTask.run()` validates total length against the 20-byte header size and a fixed maximum before allocation.
 - Inspect `ChannelType` enum values and the construction call sites to recover which port/channel carries authentication.
+
+
+## 21. Branch-level header validation and channel-type inventory
+
+This pass decoded the conditional branch targets in the DEX methods rather than relying only on the invoke-reference list.
+
+### 21.1 Header size and CRC mismatch path
+
+Both `MessageHeader.createMessageHeaderFromBytes(byte[])` and `MessageHeader.assign(byte[])` compare the input array length against the constant `20` before decoding fields. Inputs shorter than 20 bytes branch to a `ProtocolException` path whose message begins `Protocol header bytes size[`.
+
+The checksum path is now branch-confirmed:
+
+- the parser reads the stored short checksum from byte offset 18;
+- it invokes `Crc16.checksum(byte[], int, int)` after decoding the header fields;
+- the conditional branch compares the calculated and stored checksum values;
+- a mismatch takes the `ProtocolException` path with message prefix `Invalid header, checksum expect:` and includes both values rendered as hexadecimal;
+- a matching checksum continues to construct/update the header.
+
+The same shape is present in both byte-array entry points. This confirms that a compatible implementation must reject undersized headers and checksum mismatches before dispatching a message. The CRC helper's exact algorithm/polynomial and the call's exact offset/length operands still need to be recorded from the helper body and register operands; do not infer those solely from the exception text.
+
+### 21.2 ChannelType enum names recovered
+
+The `ChannelType` enum's static initializer contains these channel names:
+
+- `CUSTOM`
+- `UIBC`
+- `RTSP`
+- `RTP`
+- `AUTH`
+- `CONTROL`
+- `MEDIA`
+- `SENSOR`
+- `CERT`
+- `VIDEO`
+
+`ChannelType.fromPort(int)` iterates the enum values and compares the requested port against each value's `getPort()`. This confirms the official implementation maps ports to named logical channels through the enum rather than using the channel name alone as the lookup key.
+
+The enum initializer contains port constants, but this pass has not yet safely mapped every constant to its corresponding enum value. Consequently, this section does **not** claim numeric ports for AUTH/CONTROL/MEDIA/CERT or the order in which those channels are opened.
+
+### 21.3 Implementation implications
+
+- Enforce the 20-byte minimum before field parsing.
+- Reject checksum mismatches as protocol errors; do not pass the frame to protobuf parsing.
+- Keep AOA transport framing separate from the UCar 20-byte message header.
+- Keep channel-name inventory separate from numeric port assignments until the enum constructor operands and channel creation call sites are decoded.
+
+### 21.4 Remaining reverse-engineering targets
+
+1. Decode `Crc16.checksum` to establish its polynomial, initialization, final XOR, and exact byte range.
+2. Decode enum initializer register/constant operands and `getPort()` field assignment to map each channel name to its numeric port.
+3. Trace `UCarAuthService` and `CarCertManager` construction to identify which channel types are instantiated first and whether auth/certificate setup has a strict order.
+4. Finish branch-level review of `fillBuffer` and `SocketChannelReadTask.run()` for EOF, zero-byte reads, and declared-length validation before allocation.
