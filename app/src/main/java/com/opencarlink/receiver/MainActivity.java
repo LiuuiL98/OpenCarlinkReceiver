@@ -32,6 +32,9 @@ import java.util.Map;
 public class MainActivity extends Activity {
     private static final String ACTION_USB_PERMISSION = "com.opencarlink.receiver.USB_PERMISSION";
     private static final String ACTION_AOA_PERMISSION = "com.opencarlink.receiver.AOA_PERMISSION";
+    private static final String ACTION_AOA_DATA_PERMISSION = "com.opencarlink.receiver.AOA_DATA_PERMISSION";
+    private static final int AOA_VENDOR_ID = 0x18D1;
+    private static final int AOA_PRODUCT_ID = 0x2D00;
     private LinearLayout root;
     private TextView diagnostics;
     private TextView usbTestStatus;
@@ -48,6 +51,9 @@ public class MainActivity extends Activity {
                 setUsbStatus("USB 权限结果异常：系统未返回设备信息。");
             } else if (!granted) {
                 setUsbStatus("未获得 USB 访问权限。你可以重新点击对应按钮，或检查系统权限提示。");
+            } else if (ACTION_AOA_DATA_PERMISSION.equals(action)) {
+                setUsbStatus("已获得 AOA 设备 USB 权限，正在进行只读 Bulk IN 接收测试……");
+                testAoaBulkRead(device);
             } else if (aoaRequest) {
                 setUsbStatus("已获得 USB 权限，开始执行标准 AOA 握手……");
                 performAoaHandshake(device);
@@ -71,6 +77,7 @@ public class MainActivity extends Activity {
     private void registerUsbReceiver() {
         IntentFilter filter = new IntentFilter(ACTION_USB_PERMISSION);
         filter.addAction(ACTION_AOA_PERMISSION);
+        filter.addAction(ACTION_AOA_DATA_PERMISSION);
         if (Build.VERSION.SDK_INT >= 33) {
             registerReceiver(usbPermissionReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
         } else {
@@ -105,7 +112,7 @@ public class MainActivity extends Activity {
         root.addView(title, matchWrap());
 
         TextView subtitle = new TextView(this);
-        subtitle.setText("车机兼容性诊断工具 · 版本 0.1.4");
+        subtitle.setText("车机兼容性诊断工具 · 版本 0.1.5");
         subtitle.setTextColor(0xFFB7C5D3);
         subtitle.setTextSize(13);
         subtitle.setPadding(0, dp(6), 0, dp(18));
@@ -135,6 +142,15 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams aoaParams = matchWrap();
         aoaParams.topMargin = dp(8);
         root.addView(aoaButton, aoaParams);
+
+        Button aoaReadButton = new Button(this);
+        aoaReadButton.setText("申请 AOA 设备权限并测试接收");
+        aoaReadButton.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { requestAoaDataPermission(); }
+        });
+        LinearLayout.LayoutParams aoaReadParams = matchWrap();
+        aoaReadParams.topMargin = dp(8);
+        root.addView(aoaReadButton, aoaReadParams);
 
         TextView aoaWarning = new TextView(this);
         aoaWarning.setText("注意：AOA 会向连接的 Android 设备发送标准 USB 控制请求，并可能导致对端 USB 重新枚举、断开当前调试连接。仅在你明确要测试时点击；此功能不发送 ICCOA 业务数据。");
@@ -230,6 +246,129 @@ public class MainActivity extends Activity {
         } catch (Exception e) {
             setUsbStatus("请求 AOA 测试权限失败：" + e.getClass().getSimpleName() + "：" + safeMessage(e));
         }
+    }
+
+    private UsbDevice findAoaDevice() {
+        if (usbManager == null) return null;
+        Map<String, UsbDevice> devices = usbManager.getDeviceList();
+        if (devices == null) return null;
+        for (UsbDevice device : devices.values()) {
+            if (device.getVendorId() == AOA_VENDOR_ID && device.getProductId() == AOA_PRODUCT_ID) {
+                return device;
+            }
+        }
+        return null;
+    }
+
+    private void requestAoaDataPermission() {
+        UsbDevice device = findAoaDevice();
+        if (device == null) {
+            setUsbStatus("未找到 AOA 配件设备 18D1:2D00。请先连接 S26，必要时执行 AOA 模式切换，再刷新诊断信息。");
+            refreshDiagnostics();
+            return;
+        }
+        if (usbManager.hasPermission(device)) {
+            setUsbStatus("已拥有 18D1:2D00 的 USB 权限，开始只读 Bulk IN 测试……");
+            testAoaBulkRead(device);
+            refreshDiagnostics();
+            return;
+        }
+        try {
+            Intent intent = new Intent(ACTION_AOA_DATA_PERMISSION);
+            intent.setPackage(getPackageName());
+            int flags = PendingIntent.FLAG_UPDATE_CURRENT;
+            if (Build.VERSION.SDK_INT >= 31) flags |= PendingIntent.FLAG_MUTABLE;
+            PendingIntent permissionIntent = PendingIntent.getBroadcast(this, 2, intent, flags);
+            setUsbStatus("正在单独申请 AOA 配件 18D1:2D00 的 USB 权限。授权后只进行 Bulk IN 读取，不会向设备写入数据。");
+            usbManager.requestPermission(device, permissionIntent);
+        } catch (Exception e) {
+            setUsbStatus("申请 AOA 配件权限失败：" + e.getClass().getSimpleName() + "：" + safeMessage(e));
+        }
+    }
+
+    private void testAoaBulkRead(final UsbDevice device) {
+        Thread worker = new Thread(new Runnable() {
+            @Override public void run() {
+                UsbDeviceConnection connection = null;
+                UsbInterface claimedInterface = null;
+                String result;
+                try {
+                    if (device.getVendorId() != AOA_VENDOR_ID || device.getProductId() != AOA_PRODUCT_ID) {
+                        result = "只读测试已取消：设备 VID/PID 已变化，请刷新诊断信息后重试。";
+                    } else {
+                        connection = usbManager.openDevice(device);
+                        if (connection == null) {
+                            result = "AOA Bulk IN 测试失败：openDevice() 返回空。";
+                        } else {
+                            UsbEndpoint inEndpoint = null;
+                            for (int i = 0; i < device.getInterfaceCount(); i++) {
+                                UsbInterface candidate = device.getInterface(i);
+                                for (int j = 0; j < candidate.getEndpointCount(); j++) {
+                                    UsbEndpoint endpoint = candidate.getEndpoint(j);
+                                    if (endpoint.getType() == UsbConstants.USB_ENDPOINT_XFER_BULK
+                                            && endpoint.getDirection() == UsbConstants.USB_DIR_IN) {
+                                        claimedInterface = candidate;
+                                        inEndpoint = endpoint;
+                                        break;
+                                    }
+                                }
+                                if (inEndpoint != null) break;
+                            }
+                            if (inEndpoint == null || claimedInterface == null) {
+                                result = "AOA Bulk IN 测试失败：设备没有暴露 Bulk IN 端点。";
+                            } else if (!connection.claimInterface(claimedInterface, true)) {
+                                result = "AOA Bulk IN 测试失败：claimInterface() 未能声明接口。";
+                            } else {
+                                byte[] buffer = new byte[Math.max(1024, inEndpoint.getMaxPacketSize())];
+                                int totalBytes = 0;
+                                int successfulReads = 0;
+                                int timeoutOrNoData = 0;
+                                int errors = 0;
+                                long deadline = android.os.SystemClock.elapsedRealtime() + 5000;
+                                while (android.os.SystemClock.elapsedRealtime() < deadline
+                                        && successfulReads < 20 && totalBytes < 65536) {
+                                    int count = connection.bulkTransfer(inEndpoint, buffer, buffer.length, 500);
+                                    if (count > 0) {
+                                        totalBytes += count;
+                                        successfulReads++;
+                                    } else if (count == 0 || count == -1) {
+                                        timeoutOrNoData++;
+                                    } else {
+                                        errors++;
+                                        break;
+                                    }
+                                }
+                                result = "AOA Bulk IN 只读测试结束（最长约 5 秒）。接口=" + claimedInterface.getId()
+                                        + "，端点=" + hex2(inEndpoint.getAddress())
+                                        + "，成功读取次数=" + successfulReads
+                                        + "，收到字节=" + totalBytes
+                                        + "，无数据/超时次数=" + timeoutOrNoData
+                                        + "，其他错误次数=" + errors
+                                        + "。本测试未向 Bulk OUT 写入任何数据；没有收到数据不代表 ICCOA 不存在。";
+                            }
+                        }
+                    }
+                } catch (Exception e) {
+                    result = "AOA Bulk IN 只读测试异常：" + e.getClass().getSimpleName() + "：" + safeMessage(e);
+                } finally {
+                    if (connection != null) {
+                        if (claimedInterface != null) {
+                            try { connection.releaseInterface(claimedInterface); } catch (Exception ignored) { }
+                        }
+                        try { connection.close(); } catch (Exception ignored) { }
+                    }
+                }
+                final String finalResult = result;
+                runOnUiThread(new Runnable() {
+                    @Override public void run() {
+                        setUsbStatus(finalResult);
+                        refreshDiagnostics();
+                    }
+                });
+            }
+        }, "AOA-BulkIn-Diagnostic");
+        worker.setDaemon(true);
+        worker.start();
     }
 
     private void performAoaHandshake(UsbDevice device) {
@@ -393,8 +532,9 @@ public class MainActivity extends Activity {
 
         out.append("\n【USB 测试说明】\n");
         out.append("“申请 USB 权限并测试打开连接”仅打开并关闭设备，不声明接口或传输数据。\n");
-        out.append("“尝试 AOA 模式切换”会执行标准 AOA 请求 51/52/53，并可能让对端 USB 重新枚举；它不发送 ICCOA 业务数据。\n");
-        out.append("AOA 模式成功与否、USB 描述符均不能单独证明 ICCOA 业务协议已实现。\n");
+        out.append("“尝试 AOA 模式切换”会执行标准 AOA 请求 51/52/53，并可能让对端 USB 重新枚举。\n");
+        out.append("“申请 AOA 设备权限并测试接收”仅对 18D1:2D00 声明接口并限时读取 Bulk IN；不向 Bulk OUT 写入数据。\n");
+        out.append("AOA 模式及只读接收结果均不能单独证明 ICCOA 业务协议已实现。\n");
         diagnostics.setText(out.toString());
     }
 
