@@ -31,6 +31,7 @@ import java.util.Map;
 
 public class MainActivity extends Activity {
     private static final String ACTION_USB_PERMISSION = "com.opencarlink.receiver.USB_PERMISSION";
+    private static final String ACTION_AOA_PERMISSION = "com.opencarlink.receiver.AOA_PERMISSION";
     private LinearLayout root;
     private TextView diagnostics;
     private TextView usbTestStatus;
@@ -38,13 +39,18 @@ public class MainActivity extends Activity {
     private boolean receiverRegistered;
     private final BroadcastReceiver usbPermissionReceiver = new BroadcastReceiver() {
         @Override public void onReceive(Context context, Intent intent) {
-            if (!ACTION_USB_PERMISSION.equals(intent.getAction())) return;
+            String action = intent.getAction();
+            if (!ACTION_USB_PERMISSION.equals(action) && !ACTION_AOA_PERMISSION.equals(action)) return;
+            boolean aoaRequest = ACTION_AOA_PERMISSION.equals(action);
             UsbDevice device = intent.getParcelableExtra(UsbManager.EXTRA_DEVICE);
             boolean granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false);
             if (device == null) {
                 setUsbStatus("USB 权限结果异常：系统未返回设备信息。");
             } else if (!granted) {
-                setUsbStatus("未获得 USB 访问权限。你可以重新点击按钮，或检查系统权限提示。");
+                setUsbStatus("未获得 USB 访问权限。你可以重新点击对应按钮，或检查系统权限提示。");
+            } else if (aoaRequest) {
+                setUsbStatus("已获得 USB 权限，开始执行标准 AOA 握手……");
+                performAoaHandshake(device);
             } else {
                 setUsbStatus("已获得 USB 访问权限，正在测试打开连接……");
                 testOpenAndClose(device);
@@ -98,7 +104,7 @@ public class MainActivity extends Activity {
         root.addView(title, matchWrap());
 
         TextView subtitle = new TextView(this);
-        subtitle.setText("车机兼容性诊断工具 · 版本 0.1.2");
+        subtitle.setText("车机兼容性诊断工具 · 版本 0.1.3");
         subtitle.setTextColor(0xFFB7C5D3);
         subtitle.setTextSize(13);
         subtitle.setPadding(0, dp(6), 0, dp(18));
@@ -119,6 +125,22 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams buttonParams = matchWrap();
         buttonParams.topMargin = dp(8);
         root.addView(usbTest, buttonParams);
+
+        Button aoaButton = new Button(this);
+        aoaButton.setText("尝试 AOA 模式切换（实验功能）");
+        aoaButton.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { requestUsbPermissionAndStartAoa(); }
+        });
+        LinearLayout.LayoutParams aoaParams = matchWrap();
+        aoaParams.topMargin = dp(8);
+        root.addView(aoaButton, aoaParams);
+
+        TextView aoaWarning = new TextView(this);
+        aoaWarning.setText("注意：AOA 会向连接的 Android 设备发送标准 USB 控制请求，并可能导致对端 USB 重新枚举、断开当前调试连接。仅在你明确要测试时点击；此功能不发送 ICCOA 业务数据。");
+        aoaWarning.setTextColor(0xFFFFD166);
+        aoaWarning.setTextSize(12);
+        aoaWarning.setPadding(0, dp(4), 0, dp(4));
+        root.addView(aoaWarning, matchWrap());
 
         usbTestStatus = new TextView(this);
         usbTestStatus.setText("USB 连接测试：尚未执行。此测试不会向设备发送数据。");
@@ -170,6 +192,100 @@ public class MainActivity extends Activity {
             usbManager.requestPermission(device, permissionIntent);
         } catch (Exception e) {
             setUsbStatus("请求 USB 权限失败：" + e.getClass().getSimpleName() + "：" + safeMessage(e));
+        }
+    }
+
+    private void requestUsbPermissionAndStartAoa() {
+        if (usbManager == null) {
+            setUsbStatus("USB 服务不可用。");
+            return;
+        }
+        Map<String, UsbDevice> devices = usbManager.getDeviceList();
+        if (devices == null || devices.isEmpty()) {
+            setUsbStatus("未检测到 USB 设备。请连接发送端后刷新诊断信息。");
+            return;
+        }
+        UsbDevice device = devices.values().iterator().next();
+        if (device.getVendorId() == 0x18D1 && (device.getProductId() == 0x2D00
+                || device.getProductId() == 0x2D01 || device.getProductId() == 0x2D04)) {
+            setUsbStatus("设备看起来已经处于 Google AOA 配件模式（18D1:2Dxx）。请刷新诊断信息；无需再次发送切换请求。");
+            refreshDiagnostics();
+            return;
+        }
+        if (usbManager.hasPermission(device)) {
+            setUsbStatus("已拥有 USB 权限，正在对 " + hex4(device.getVendorId()) + ":" + hex4(device.getProductId()) + " 执行标准 AOA 握手……");
+            performAoaHandshake(device);
+            refreshDiagnostics();
+            return;
+        }
+        try {
+            Intent intent = new Intent(ACTION_AOA_PERMISSION);
+            intent.setPackage(getPackageName());
+            int flags = PendingIntent.FLAG_UPDATE_CURRENT;
+            if (Build.VERSION.SDK_INT >= 31) flags |= PendingIntent.FLAG_MUTABLE;
+            PendingIntent permissionIntent = PendingIntent.getBroadcast(this, 1, intent, flags);
+            setUsbStatus("已请求 AOA 测试所需的 USB 权限。授权后会发送标准 AOA 控制请求，并可能使对端重新枚举。");
+            usbManager.requestPermission(device, permissionIntent);
+        } catch (Exception e) {
+            setUsbStatus("请求 AOA 测试权限失败：" + e.getClass().getSimpleName() + "：" + safeMessage(e));
+        }
+    }
+
+    private void performAoaHandshake(UsbDevice device) {
+        UsbDeviceConnection connection = null;
+        try {
+            connection = usbManager.openDevice(device);
+            if (connection == null) {
+                setUsbStatus("AOA 握手未执行：openDevice() 返回空。");
+                return;
+            }
+            byte[] versionBuffer = new byte[2];
+            int versionLength = connection.controlTransfer(
+                    UsbConstants.USB_DIR_IN | UsbConstants.USB_TYPE_VENDOR,
+                    51, 0, 0, versionBuffer, versionBuffer.length, 2000);
+            if (versionLength < 2) {
+                setUsbStatus("AOA 握手停止：设备未返回有效 AOA 协议版本（请求 51，返回长度 " + versionLength + "）。当前设备可能不支持标准 AOA，或此 USB 状态不接受该请求。未发送切换请求。");
+                return;
+            }
+            int aoaVersion = (versionBuffer[0] & 0xFF) | ((versionBuffer[1] & 0xFF) << 8);
+            if (aoaVersion < 1 || aoaVersion > 2) {
+                setUsbStatus("AOA 握手停止：返回了无法识别的 AOA 版本 " + aoaVersion + "。未发送切换请求。");
+                return;
+            }
+
+            String[] identity = new String[] {
+                    "OpenCarlinkReceiver",
+                    "OpenCarlinkReceiver experimental AOA probe",
+                    "Experimental AOA transport probe",
+                    "0.1.3",
+                    "https://github.com/LiuuiL98/OpenCarlinkReceiver",
+                    "OCR-ANDROID-RECEIVER"
+            };
+            for (int i = 0; i < identity.length; i++) {
+                byte[] value = (identity[i] + "\0").getBytes("UTF-8");
+                int sent = connection.controlTransfer(
+                        UsbConstants.USB_DIR_OUT | UsbConstants.USB_TYPE_VENDOR,
+                        52, 0, i, value, value.length, 2000);
+                if (sent != value.length) {
+                    setUsbStatus("AOA 握手中止：AOA 版本 " + aoaVersion + "，发送身份字符串 index=" + i
+                            + " 失败（返回 " + sent + "，预期 " + value.length + "）。未请求切换模式。");
+                    return;
+                }
+            }
+            int startResult = connection.controlTransfer(
+                    UsbConstants.USB_DIR_OUT | UsbConstants.USB_TYPE_VENDOR,
+                    53, 0, 0, null, 0, 2000);
+            if (startResult < 0) {
+                setUsbStatus("AOA 版本 " + aoaVersion + "：身份字符串已发送，但 START_ACCESSORY_MODE 请求失败（" + startResult + "）。请刷新诊断信息。");
+            } else {
+                setUsbStatus("AOA 版本 " + aoaVersion + "：已发送 START_ACCESSORY_MODE 请求。对端可能会断开并重新枚举；请等待数秒后点击“刷新诊断信息”。本步骤尚未实现 ICCOA 数据协议。");
+            }
+        } catch (Exception e) {
+            setUsbStatus("AOA 握手异常：" + e.getClass().getSimpleName() + "：" + safeMessage(e));
+        } finally {
+            if (connection != null) {
+                try { connection.close(); } catch (Exception ignored) { }
+            }
         }
     }
 
@@ -275,8 +391,9 @@ public class MainActivity extends Activity {
         }
 
         out.append("\n【USB 测试说明】\n");
-        out.append("点击上方“申请 USB 权限并测试打开连接”后，系统可能显示授权弹窗。授权后仅调用 openDevice() 并立即关闭；不会 claim 接口、读取端点或向设备发送数据。\n");
-        out.append("USB 描述符和成功打开设备都不能单独证明 ICCOA 协议存在。\n");
+        out.append("“申请 USB 权限并测试打开连接”仅打开并关闭设备，不声明接口或传输数据。\n");
+        out.append("“尝试 AOA 模式切换”会执行标准 AOA 请求 51/52/53，并可能让对端 USB 重新枚举；它不发送 ICCOA 业务数据。\n");
+        out.append("AOA 模式成功与否、USB 描述符均不能单独证明 ICCOA 业务协议已实现。\n");
         diagnostics.setText(out.toString());
     }
 
