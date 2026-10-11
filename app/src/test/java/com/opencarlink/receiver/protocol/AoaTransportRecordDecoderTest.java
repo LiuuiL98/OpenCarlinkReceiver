@@ -57,6 +57,18 @@ public class AoaTransportRecordDecoderTest {
         assertFalse(decoder.hasPartialRecord());
     }
 
+    @Test public void malformedHeaderResetsDecoderForSubsequentInput() {
+        AoaTransportRecordDecoder decoder = new AoaTransportRecordDecoder(1024);
+        byte[] badHeader = new byte[] {0, 0, 0, 0, 0, 0, 0, 8};
+        try {
+            decoder.feed(badHeader, 0, badHeader.length);
+            fail("expected invalid channel ID");
+        } catch (IllegalArgumentException expected) { }
+        assertFalse(decoder.hasPartialRecord());
+        byte[] validRecord = record(2, new byte[] {1, 2, 3, 4, 5, 6, 7, 8});
+        assertEquals(1, decoder.feed(validRecord, 0, validRecord.length).size());
+    }
+
     @Test public void resetDiscardsPartialRecord() {
         AoaTransportRecordDecoder decoder = new AoaTransportRecordDecoder(1024);
         byte[] record = record(2, new byte[] {1, 2, 3, 4, 5, 6, 7, 8});
