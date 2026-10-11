@@ -439,3 +439,21 @@ The next decisive static-analysis task is to inspect `ConnectChannel`'s construc
 ### Implementation decision
 
 Until these are established, do not put UCar framing directly into `MainActivity`'s USB Bulk IN loop. Keep the current diagnostic receiver read-only. The eventual architecture should separate USB/ AOА transport framing, channel/socket bridging, and UCar message framing so each can be tested independently.
+
+
+## 17. Next reverse-engineering pass: transport code is the blocker, not the protobuf schema
+
+The official APK was rechecked directly as an archive. It contains `ucar.proto` at the APK root (15,595 bytes), six DEX files beyond the primary DEX (`classes2.dex` through `classes7.dex`), and native libraries including `libusbio.so`. The protobuf schema is therefore available as a packaged source artifact; reconstructing it from generated Java is unnecessary.
+
+A quick targeted check of the existing S9 logcat capture did not find usable runtime log lines containing `ConnectChannel`, `UCarAuthService`, `ServerKeyNegotiator`, `CarCertManager`, or header-parser error strings. The existing log cannot be used to infer the channel construction path or actual message order.
+
+### Consequence for the next pass
+
+The missing evidence is the instruction body and callers for `ConnectChannel`, not more USB probing or more schema extraction. The next pass must produce a DEX-level call graph for:
+- `ConnectChannel.<init>`, `send`, receive/read loop, and parser dispatch;
+- the factory or owner that constructs `ConnectChannel`;
+- the callback that forwards decoded messages to `UCarAuthService`;
+- `CarCertManager` construction and `onConnect` registration;
+- the channel/socket object passed to `ConnectChannel`.
+
+Until these instruction bodies are recovered, any claim that `ConnectChannel` uses a particular socket, frames reads in a particular way, or validates CRC at a specific point would exceed the evidence. Keep the app implementation unchanged until this call graph is established.
