@@ -124,8 +124,17 @@ public class MainActivity extends Activity {
 
         out.append("\nVIDEO DECODERS (H.264)\n");
         try {
-            MediaCodecList codecList = new MediaCodecList(MediaCodecList.REGULAR_CODECS);
-            MediaCodecInfo[] codecs = codecList.getCodecInfos();
+            MediaCodecInfo[] codecs;
+            if (Build.VERSION.SDK_INT >= 21) {
+                MediaCodecList codecList = new MediaCodecList(MediaCodecList.REGULAR_CODECS);
+                codecs = codecList.getCodecInfos();
+            } else {
+                int count = MediaCodecList.getCodecCount();
+                codecs = new MediaCodecInfo[count];
+                for (int i = 0; i < count; i++) {
+                    codecs[i] = MediaCodecList.getCodecInfoAt(i);
+                }
+            }
             int found = 0;
             for (MediaCodecInfo codec : codecs) {
                 if (codec.isEncoder()) continue;
