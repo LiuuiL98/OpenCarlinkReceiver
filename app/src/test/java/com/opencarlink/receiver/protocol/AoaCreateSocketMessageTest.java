@@ -15,6 +15,21 @@ public class AoaCreateSocketMessageTest {
         assertEquals(7, parsed.channelId);
         assertEquals(254, parsed.socketType);
         assertEquals(128, parsed.channelMessageType);
+        assertFalse(parsed.isServerSocketRequest());
+        assertFalse(parsed.isClientSocketRequest());
+    }
+
+    @Test public void classifiesServerAndClientSocketTypes() {
+        byte[] serverBody = createSocketBody(7225, -1, AoaCreateSocketMessage.SOCKET_TYPE_SERVER, 0);
+        AoaCreateSocketMessage server = AoaCreateSocketMessage.parse(serverBody, serverBody.length);
+        assertTrue(server.isServerSocketRequest());
+        assertFalse(server.isClientSocketRequest());
+        assertEquals(AoaCreateSocketMessage.SERVER_CHANNEL_ID_SENTINEL, server.channelId);
+
+        byte[] clientBody = createSocketBody(7225, 7, AoaCreateSocketMessage.SOCKET_TYPE_CLIENT, 0);
+        AoaCreateSocketMessage client = AoaCreateSocketMessage.parse(clientBody, clientBody.length);
+        assertFalse(client.isServerSocketRequest());
+        assertTrue(client.isClientSocketRequest());
     }
 
     @Test public void allowsLargerBackingArrayButHonorsDeclaredPayloadLength() {
@@ -29,6 +44,22 @@ public class AoaCreateSocketMessageTest {
         assertInvalid(null, 10);
         assertInvalid(new byte[9], 9);
         assertInvalid(new byte[10], 11);
+    }
+
+    private static byte[] createSocketBody(int port, int channelId, int socketType, int messageType) {
+        byte[] body = new byte[AoaCreateSocketMessage.MIN_LENGTH];
+        putIntBigEndian(body, 0, port);
+        putIntBigEndian(body, 4, channelId);
+        body[8] = (byte) socketType;
+        body[9] = (byte) messageType;
+        return body;
+    }
+
+    private static void putIntBigEndian(byte[] output, int offset, int value) {
+        output[offset] = (byte) (value >>> 24);
+        output[offset + 1] = (byte) (value >>> 16);
+        output[offset + 2] = (byte) (value >>> 8);
+        output[offset + 3] = (byte) value;
     }
 
     private static void assertInvalid(byte[] body, int length) {
