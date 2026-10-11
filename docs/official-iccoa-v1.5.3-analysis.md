@@ -733,3 +733,19 @@ The UIBC/RTSP/RTP constants are directly visible in the initializer sequence; th
 - Treat these as candidate local TCP/socket channel ports in the UCar channel layer, not USB endpoints and not AOA Bulk endpoint addresses.
 - Do not confuse the AOA bridge's `port` field in its create-socket message with a raw USB endpoint number.
 - Use the recovered mapping to guide logging and endpoint tracing; only promote it to an implementation constant after verifying the caller's `ChannelType` and observed socket lifecycle.
+
+
+## 26. CRC lookup table fingerprint: reflected 0xA001 family
+
+The static initializer's lookup table was inspected directly in the DEX code units. Its first entries include `0x0000`, `0xC0C1`, `0xC181`, `0x0140`, `0xC301`, and `0x03C0`. This sequence is a strong fingerprint of the reflected CRC-16 table generated with polynomial `0xA001` (the reflected form commonly associated with CRC-16/ARC and Modbus-family implementations).
+
+**Scope of this finding:** the table fingerprint supports the reflected `0xA001` polynomial family. It does not alone prove the full named CRC variant, because the initialization value, final XOR, accumulator update order, and exact checksum range must also be read from the method's arithmetic and validated against a known official header. Therefore the receiver must not yet label this definitively as CRC-16/ARC or CRC-16/MODBUS, and no implementation constant has been added to the app.
+
+### Verification required before implementation
+
+1. Recover the accumulator's initial value from the method entry path.
+2. Recover the per-byte update expression and whether the result is masked to 16 bits at each step.
+3. Confirm the header call site's exact offset and length, expected to exclude the stored checksum field only if the operands show that.
+4. Validate against at least one complete, authorized official header captured at runtime; a table prefix alone is insufficient.
+
+This is a stronger result than class-name inference, but remains a static-analysis conclusion pending arithmetic and frame validation.
