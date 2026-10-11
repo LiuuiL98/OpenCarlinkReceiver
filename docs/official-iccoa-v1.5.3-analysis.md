@@ -1121,3 +1121,19 @@ Consequences for this receiver:
 The byte-array integer helpers are documented as big-endian in section 7, so that is no longer the immediate blocker. The remaining blocker is the exact AOA transport header semantics and how the reader handles partial reads, declared body lengths, channel IDs, and create-socket records.
 
 Source-of-truth limitation: the supplied APK's static DEX behavior supports this layer separation, but no complete, non-sensitive runtime frame has yet been captured to validate the receiver's live interpretation.
+
+
+## 45. AOA header probe extracted into a tested utility
+
+The diagnostic's eight-byte prefix display now uses `AoaTransportHeaderProbe` rather than inline bit shifts in `MainActivity`. The utility intentionally reports both endian interpretations and does not call either word a length, channel ID, or command. Unit tests cover both interpretations, the actual returned-length guard, and invalid offsets.
+
+This is an instrumentation improvement, **not** a semantic decode of the official transport header. The supplied DEX observations establish that the official reader decodes two integers and then performs a separate body read, but the existing invoke-sequence scan did not recover the branch predicates and register data flow needed to prove which integer controls the body buffer size or how the other value is used. The existing diagnostic loop is also not a faithful reproduction of the official 8-byte-header-then-body read sequence.
+
+### Remaining work to finish step 2
+
+1. Re-run a DEX code-item disassembly focused on `AOAConnectManager$AOAReadThread.run()`, tracking registers from both `ByteConvert.bytesToInt` calls through the body-buffer allocation and second `bulkTransferIn` call.
+2. Track the dispatch arguments from the same method into `handleCreateSocket` and `getReadThreadByChannelId`; keep the create-socket record path distinct from ordinary channel data.
+3. Only after those data-flow edges are resolved, implement a bounded AOA reassembler with tests for split headers, split bodies, multiple records and malformed lengths. Do not choose a length formula from the field names or a single runtime sample.
+4. Capture a read-only trace with the official receiver's exact read cadence; redact authentication/certificate material before sharing.
+
+No UCar parsing or outbound USB writes have been reintroduced at the raw Bulk IN layer.
