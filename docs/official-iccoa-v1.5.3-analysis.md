@@ -1017,3 +1017,26 @@ The exact DEX arithmetic for the checksum loop has not been independently decode
 The table and coverage are established; the full CRC parameters are not. The Android DEX documentation notes that instructions are encoded as 16-bit code units and that formats determine operand/register layout, so a trustworthy formula requires a complete instruction decode rather than inference from the table alone: https://source.android.com/docs/core/runtime/instruction-formats.
 
 This section is a test plan, not a claim that these tests or a production CRC implementation have already been added to the app.
+
+
+## 40. CRC implementation gate: no formula promoted without verified instruction decode
+
+This pass cross-checked the next step against the official Android DEX instruction-format reference. DEX instruction words are 16-bit code units, and the instruction format determines operand/register layout and instruction width. A decoder that gets an instruction width wrong can misalign every following instruction, so a guessed accumulator formula is not acceptable evidence.
+
+Source: Android Open Source Project, “Dalvik executable instruction formats”: https://source.android.com/docs/core/runtime/instruction-formats.
+
+### Current known-good protocol facts
+
+- Header minimum length: 20 bytes.
+- Stored checksum: big-endian 16-bit value at offset 18.
+- Checksum input: exactly the first 18 bytes, offsets 0–17.
+- CRC lookup table: all 256 entries match the reflected polynomial `0xA001` table generator.
+
+### Remaining formula fields
+
+- Initial accumulator value.
+- Exact byte-to-table-index calculation and accumulator update.
+- Any final XOR/masking behavior.
+- End-to-end confirmation against a valid official frame.
+
+No new CRC implementation is being described as complete in this commit. The next implementation change should only be made after the method's instruction stream has been decoded with verified widths and branch targets, and the result has been checked against the ByteBuffer overload or a known-valid frame.
