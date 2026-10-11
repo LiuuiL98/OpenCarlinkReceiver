@@ -936,3 +936,24 @@ The checksum table is now verified exactly against the reflected `0xA001` table 
 - The complete accumulator initialization/update/finalization formula.
 
 The safe next step is to inspect the exact DEX invoke arguments and branch around each checksum call, then cross-check both parsing methods for identical coverage. No receiver-side CRC implementation should be considered compatible until that range and arithmetic are both recovered and tested against an actual valid frame.
+
+
+## 36. Checksum call-site review: fixed header field vs checksum input remain distinct
+
+The two header parsing methods have now been explicitly listed as separate verification targets:
+- `MessageHeader.assign(byte[])`
+- `MessageHeader.createMessageHeaderFromBytes(byte[])`
+
+The static evidence available in this analysis confirms a 20-byte minimum header, checksum storage at bytes 18–19, and big-endian helpers for integer/short fields. It does not yet include a verified disassembly of the argument registers at both `Crc16.checksum` invoke sites. As a result, the input start/length and whether the checksum bytes are excluded cannot responsibly be reported as known.
+
+The official DEX reference describes each instruction as one or more 16-bit code units and requires decoding the specific instruction format to determine register operands and branch targets: https://source.android.com/docs/core/runtime/instruction-formats. This matters here because the checksum method arguments are passed in registers; a mis-sized instruction can shift the entire subsequent decode and produce false argument values.
+
+### Current receiver guidance
+
+Keep the header parser and checksum function isolated behind a small interface. Add tests for:
+- a header shorter than 20 bytes;
+- an invalid stored checksum;
+- identical checksum results from the ByteBuffer and byte-array overloads over the same byte range;
+- a valid official frame once a non-sensitive test capture is available.
+
+Do not hard-code a checksum coverage range until both call sites are decoded and compared. This update records the evidence boundary; it does not claim the CRC arithmetic or coverage has been fully recovered.
