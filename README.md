@@ -21,7 +21,7 @@
 gradle assembleDebug
 ```
 
-The APK is generated at `app/build/outputs/apk/debug/app-debug.apk`.
+APK 文件生成在 `app/build/outputs/apk/debug/app-debug.apk`.
 
 ## 首版原型功能
 
