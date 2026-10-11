@@ -105,3 +105,10 @@ For Android AOA PID `0x2D01`, the standard accessory interface is interface 0 an
 Confirmed from the supplied APK's DEX: class/method inventory, 20-byte minimum header, three integer fields at offsets 0/4/8, command-description writer call, a short at offset 16, CRC16 over bytes 0–17 stored at offset 18, total-length checks, and the auth message wrapper's type/category/builder calls.
 
 Still not confirmed: custom integer/short byte order, complete command-description field layout, exact CRC polynomial/initial/final details, numeric authentication method indices, protobuf field mapping, certificate validation, complete stream framing, and the full authentication exchange. No business-protocol code or APK was changed/built during this analysis step.
+
+
+## 7. Endianness confirmed from ByteUtil
+
+A second bytecode pass inspected `ByteUtil.readIntFromBytes`, `readShortFromBytes`, `writeIntToBytes` and `writeShortToBytes`. The read paths combine bytes using shifts of 24, 16, 8 and 0 bits for integers, and 8 and 0 bits for shorts; the write paths extract those same high-to-low byte positions. This confirms **big-endian/network byte order** for these protocol integer and short helpers.
+
+Consequently, the first integer in a complete 20-byte header is decoded as a big-endian total length, the next as sequence ID, and the third as timestamp. This does not make the current 8/10-byte reads complete headers: they still need transport-level framing/reassembly before parsing.
