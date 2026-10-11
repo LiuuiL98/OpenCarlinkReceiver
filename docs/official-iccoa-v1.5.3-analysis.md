@@ -869,3 +869,19 @@ The call sites establish this ordering, but not every branch's runtime reachabil
 ### Remaining evidence gap
 
 The scan confirms invoked methods and order as represented in the read-task lambda, but does not yet establish the full branch graph, callback executor, sequence-ID allocation policy, or whether sequence IDs can be reused across channels. Those should be verified before implementing protocol-level request correlation.
+
+
+## 32. CRC16 checksum loop: current instruction-level findings
+
+A second pass over the `Crc16.checksum` DEX code items (in `classes7.dex`) confirms both overloads use the shared `CRC16_TABLE` lookup table and iterate over the requested buffer/byte-array range. The table's leading values previously observed include `0x0000`, `0xC0C1`, `0xC181`, `0x0140`, `0xC301`, and `0x03C0`, consistent with a reflected CRC-16 table generated using polynomial `0xA001`.
+
+### What can be said safely
+
+- There is a table-driven checksum loop in both `checksum(ByteBuffer, int, int)` and `checksum(byte[], int, int)`.
+- The ByteBuffer overload consults `remaining()` and calls indexed `get(...)`; the array overload accesses the byte array and uses the same table.
+- Both overloads contain explicit null/range error paths, including `NullPointerException` and `ArrayIndexOutOfBoundsException`.
+- The available invoke-only/partial instruction dump does not yet reliably establish the initial accumulator, signed-byte normalization, exact table index expression, final XOR, or exact CRC byte range used by `MessageHeader`.
+
+### Implementation status
+
+Do not treat `0xA001` alone as enough to select a named CRC-16 variant. For interoperability, recover the full arithmetic and the exact bytes covered by the header checksum, then validate against at least one real captured official frame (or a reproducible official test vector). The DEX instruction-format reference explains why instruction widths and branch offsets must be decoded correctly before drawing conclusions from a control-flow dump: https://source.android.com/docs/core/runtime/instruction-formats.
