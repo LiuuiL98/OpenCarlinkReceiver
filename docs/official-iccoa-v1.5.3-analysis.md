@@ -670,3 +670,40 @@ A further method inventory of `com.ucar.protocol.Crc16` reveals a notable compat
 This API shape means it should not be treated as a fully conventional, incrementally updateable `java.util.zip.Checksum` implementation without checking the exact return/state semantics. In particular, a receiver implementation should call the official-compatible range checksum operation over the exact header bytes, not assume that repeated `update(int)` calls are valid.
 
 The current DEX invoke scan confirms the delegation and exception path but does not yet establish the CRC table contents or polynomial. The CRC algorithm remains unimplemented in OpenCarlinkReceiver until those details are verified against the method's arithmetic and at least one captured official frame.
+
+
+## 24. Authentication and certificate channel lifecycle: call-site evidence
+
+The DEX invoke walk was extended to the constructors and startup methods of `UCarAuthService` and `CarCertManager`.
+
+### 24.1 UCarAuthService startup
+
+The `UCarAuthService` constructor:
+
+- creates a `SecurityManager`;
+- creates a `ServerKeyNegotiator`;
+- creates an inner channel object using a supplied `ChannelType`;
+- creates the message-handler callback and installs it through `ConnectChannel.setMessageHandler(...)`.
+
+Its `start(String)` method calls `ConnectChannel.start(int, String)`; `stop()` calls `ConnectChannel.closeQuietly()`.
+
+The installed handler recognizes an AuthRequest, parses it, extracts peer ID and optional work-mode/product/model/version data, calls the observer's key-negotiation callback, calls `ServerKeyNegotiator.generateKeyNegotiationInfo(...)`, then creates an AuthResponse using the incoming message's sequence ID and sends it through the channel callback path. It also recognizes AuthConfirm, parses its cipher field, converts it to a string and splits it before notifying `onClientConnectionInfoReceived(...)`.
+
+This call list confirms the logical authentication path, but does not establish the exact wire encoding of the AuthConfirm cipher or prove that every observer callback means authentication has succeeded.
+
+### 24.2 CarCertManager startup and certificate send
+
+The `CarCertManager` constructor creates its own `ConnectChannel`-derived inner object with a supplied `ChannelType`. Its `start(String)` calls `ConnectChannel.start(int, String)`; `stop()` calls `closeQuietly()`.
+
+On the channel's `onConnect()` callback, the manager creates a `CarVerifier`, calls `readCarData()`, converts the returned string to UTF-8 bytes, places those bytes into `CarCertificate.content`, creates a certificate message through `UCarCertProtocol.createCarCertificateMessage(...)`, and sends it.
+
+### 24.3 What can and cannot be inferred
+
+- Authentication and certificate delivery are represented by separate channel-manager objects, each with its own start/stop lifecycle.
+- Both startup APIs accept a channel-related integer and a string address/connection parameter through `ConnectChannel.start(int, String)`.
+- The DEX call list alone does **not** establish whether the certificate channel is started before, during, or after authentication in the full application; that requires tracing the parent coordinator's construction and startup calls.
+- Do not hard-code a guessed port, invent a certificate, or treat a parsed AuthConfirm as proof that the peer has been accepted. Use a valid, authorized test setup and record the actual runtime transitions.
+
+### 24.4 Next concrete target
+
+Trace callers of `UCarAuthService.start(String)` and `CarCertManager.start(String)` and decode the enum constructor's two integer operands to map channel ports. This is the remaining step needed to connect the authentication sequence to a concrete transport endpoint.
