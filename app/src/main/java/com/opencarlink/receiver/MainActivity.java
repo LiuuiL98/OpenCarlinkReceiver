@@ -114,7 +114,7 @@ public class MainActivity extends Activity {
         root.addView(title, matchWrap());
 
         TextView subtitle = new TextView(this);
-        subtitle.setText("车机兼容性诊断工具 · 版本 0.1.8");
+        subtitle.setText("车机兼容性诊断工具 · 版本 0.1.9");
         subtitle.setTextColor(0xFFB7C5D3);
         subtitle.setTextSize(13);
         subtitle.setPadding(0, dp(6), 0, dp(18));
@@ -153,27 +153,27 @@ public class MainActivity extends Activity {
         identityTitle.setPadding(0, dp(12), 0, dp(4));
         root.addView(identityTitle, matchWrap());
         TextView identityHint = new TextView(this);
-        identityHint.setText("目前尚未从官方 APK 中确认这些字段的实际值。修改后只影响下一次 AOA 模式切换；不要把猜测值当成官方配置。");
+        identityHint.setText("已从官方 ICCOA APK 的 AOAHostSetup.sendIdentityStrings 中确认前五项字段。序列号尚未确认，当前沿用本项目测试值。修改后只影响下一次 AOA 模式切换；身份匹配成功也不代表业务协议已连接。");
         identityHint.setTextColor(0xFFFFD166);
         identityHint.setTextSize(12);
         root.addView(identityHint, matchWrap());
-        aoaManufacturerInput = addAoaInput("制造商（manufacturer）", "OpenCarlinkReceiver");
-        aoaModelInput = addAoaInput("型号（model）", "OpenCarlinkReceiver experimental AOA probe");
-        aoaDescriptionInput = addAoaInput("描述（description）", "Experimental AOA transport probe");
-        aoaVersionInput = addAoaInput("版本（version）", "0.1.8");
-        aoaUriInput = addAoaInput("说明网址（URI）", "https://github.com/LiuuiL98/OpenCarlinkReceiver");
+        aoaManufacturerInput = addAoaInput("制造商（manufacturer）", "ICCOA");
+        aoaModelInput = addAoaInput("型号（model）", "CarLink");
+        aoaDescriptionInput = addAoaInput("描述（description）", "ICCOA CarLink");
+        aoaVersionInput = addAoaInput("版本（version）", "1.0.0");
+        aoaUriInput = addAoaInput("说明网址（URI）", "http://www.iccoa.cn/");
         aoaSerialInput = addAoaInput("序列号（serial）", "OCR-ANDROID-RECEIVER");
         Button resetIdentity = new Button(this);
         resetIdentity.setText("恢复默认 AOA 身份");
         resetIdentity.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) {
-                aoaManufacturerInput.setText("OpenCarlinkReceiver");
-                aoaModelInput.setText("OpenCarlinkReceiver experimental AOA probe");
-                aoaDescriptionInput.setText("Experimental AOA transport probe");
-                aoaVersionInput.setText("0.1.8");
-                aoaUriInput.setText("https://github.com/LiuuiL98/OpenCarlinkReceiver");
+                aoaManufacturerInput.setText("ICCOA");
+                aoaModelInput.setText("CarLink");
+                aoaDescriptionInput.setText("ICCOA CarLink");
+                aoaVersionInput.setText("1.0.0");
+                aoaUriInput.setText("http://www.iccoa.cn/");
                 aoaSerialInput.setText("OCR-ANDROID-RECEIVER");
-                setUsbStatus("已恢复默认实验身份。请注意：这不是官方 ICCOA 身份配置。");
+                setUsbStatus("已恢复从官方 APK 确认的 AOA 身份字段；序列号仍为本项目测试值。该操作只用于匹配测试，不代表 ICCOA 协议已连接。");
             }
         });
         root.addView(resetIdentity, matchWrap());
@@ -458,11 +458,11 @@ public class MainActivity extends Activity {
             }
 
             final String[] identity = new String[] {
-                    aoaManufacturerInput == null ? "OpenCarlinkReceiver" : aoaManufacturerInput.getText().toString().trim(),
-                    aoaModelInput == null ? "OpenCarlinkReceiver experimental AOA probe" : aoaModelInput.getText().toString().trim(),
-                    aoaDescriptionInput == null ? "Experimental AOA transport probe" : aoaDescriptionInput.getText().toString().trim(),
-                    aoaVersionInput == null ? "0.1.8" : aoaVersionInput.getText().toString().trim(),
-                    aoaUriInput == null ? "https://github.com/LiuuiL98/OpenCarlinkReceiver" : aoaUriInput.getText().toString().trim(),
+                    aoaManufacturerInput == null ? "ICCOA" : aoaManufacturerInput.getText().toString().trim(),
+                    aoaModelInput == null ? "CarLink" : aoaModelInput.getText().toString().trim(),
+                    aoaDescriptionInput == null ? "ICCOA CarLink" : aoaDescriptionInput.getText().toString().trim(),
+                    aoaVersionInput == null ? "1.0.0" : aoaVersionInput.getText().toString().trim(),
+                    aoaUriInput == null ? "http://www.iccoa.cn/" : aoaUriInput.getText().toString().trim(),
                     aoaSerialInput == null ? "OCR-ANDROID-RECEIVER" : aoaSerialInput.getText().toString().trim()
             };
             for (int i = 0; i < identity.length; i++) {
