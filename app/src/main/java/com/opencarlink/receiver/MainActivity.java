@@ -112,7 +112,7 @@ public class MainActivity extends Activity {
         root.addView(title, matchWrap());
 
         TextView subtitle = new TextView(this);
-        subtitle.setText("车机兼容性诊断工具 · 版本 0.1.6");
+        subtitle.setText("车机兼容性诊断工具 · 版本 0.1.7");
         subtitle.setTextColor(0xFFB7C5D3);
         subtitle.setTextSize(13);
         subtitle.setPadding(0, dp(6), 0, dp(18));
@@ -324,13 +324,21 @@ public class MainActivity extends Activity {
                                 int successfulReads = 0;
                                 int timeoutOrNoData = 0;
                                 int errors = 0;
+                                StringBuilder sampleHex = new StringBuilder();
+                                long firstDataAtMs = -1;
                                 long deadline = android.os.SystemClock.elapsedRealtime() + 5000;
                                 while (android.os.SystemClock.elapsedRealtime() < deadline
                                         && successfulReads < 20 && totalBytes < 65536) {
                                     int count = connection.bulkTransfer(inEndpoint, buffer, buffer.length, 500);
                                     if (count > 0) {
+                                        if (firstDataAtMs < 0) firstDataAtMs = android.os.SystemClock.elapsedRealtime();
                                         totalBytes += count;
                                         successfulReads++;
+                                        int sampleLimit = Math.min(count, Math.max(0, (512 - sampleHex.length() / 3)));
+                                        for (int k = 0; k < sampleLimit; k++) {
+                                            if (sampleHex.length() > 0) sampleHex.append(' ');
+                                            sampleHex.append(String.format(Locale.US, "%02X", buffer[k] & 0xFF));
+                                        }
                                     } else if (count == 0 || count == -1) {
                                         timeoutOrNoData++;
                                     } else {
@@ -344,6 +352,8 @@ public class MainActivity extends Activity {
                                         + "，收到字节=" + totalBytes
                                         + "，无数据/超时次数=" + timeoutOrNoData
                                         + "，其他错误次数=" + errors
+                                        + (firstDataAtMs >= 0 ? "，首次数据延迟=" + (firstDataAtMs - (deadline - 5000)) + "ms" : "")
+                                        + (sampleHex.length() > 0 ? "，首批数据 HEX（最多约 512 字节）=" + sampleHex : "，HEX 样本=无（本次未收到数据）")
                                         + "。本测试未向 Bulk OUT 写入任何数据；没有收到数据不代表 ICCOA 不存在。";
                             }
                         }
@@ -533,7 +543,8 @@ public class MainActivity extends Activity {
         out.append("\n【USB 测试说明】\n");
         out.append("“申请 USB 权限并测试打开连接”仅打开并关闭设备，不声明接口或传输数据。\n");
         out.append("“尝试 AOA 模式切换”会执行标准 AOA 请求 51/52/53，并可能让对端 USB 重新枚举。\n");
-        out.append("“申请 AOA 设备权限并测试接收”仅对 18D1:2D00 声明接口并限时读取 Bulk IN；不向 Bulk OUT 写入数据。\n");
+        out.append("“申请 AOA 设备权限并测试接收”仅对 18D1:2D00 声明接口并限时读取 Bulk IN；若收到数据，会显示最多约 512 字节 HEX 样本；不向 Bulk OUT 写入数据。\n");
+        out.append("官方 APK 静态检查发现 AOA 连接管理、消息头解析、ProtocolParser、CRC16、认证/证书协议和多个 channel ID 相关组件；具体帧字段和消息编号仍需从字节码进一步确认。\n");
         out.append("AOA 模式及只读接收结果均不能单独证明 ICCOA 业务协议已实现。\n");
         diagnostics.setText(out.toString());
     }
