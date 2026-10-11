@@ -365,3 +365,51 @@ This is evidence that the certificate message body is the UTF-8 bytes of the str
 4. Inspect `ConnectChannel.send` and the inbound message dispatcher to establish the exact transport path for UCar frames.
 
 Do not assume certificate-send timing from the method name `onConnect` alone. The caller establishes that it runs on a connection callback, but its ordering relative to auth must be confirmed from object wiring and channel lifecycle code.
+
+
+## 15. Key negotiation, session cipher, and certificate source
+
+The next targeted bytecode pass followed `ServerKeyNegotiator.generateKeyNegotiationInfo`, `SecurityManager`, and `CarVerifier`. The conclusions below are based on method bodies and string/method references in the supplied APK.
+
+### 15.1 Server-side key negotiation path
+
+`ServerKeyNegotiator.generateKeyNegotiationInfo(AuthRequest, ...)` contains explicit calls to:
+- read the configured PIN code;
+- parse client information from the incoming request;
+- generate an EC agreement public key and encode it;
+- generate a 32-byte nonce;
+- validate/derive peer authentication and agreement public keys;
+- call `agreeOnSessionKey`;
+- persist or update peer information;
+- generate the server authentication public key, HMAC and signature;
+- build an `AuthResponse` containing version, public keys, HMAC, agreement-key signature, nonce, result, work modes, day/night mode and screen info.
+
+The method contains separate normal-connection and quick-connection branches, with log strings for successful and failed paths. In the normal branch, the code logs `normal connection initiated by the phone` and then `normal connection succeeded` after the peer-key/session-key steps. This is consistent with the `AuthRequest` being the phone's opening message and the receiver generating `AuthResponse`; it is not evidence that an arbitrary client can pass authentication without valid key material.
+
+### 15.2 Session encryption
+
+The packaged `SecurityManager` contains the transformation string `AES/GCM/NoPadding`, constructs `SecretKeySpec` with algorithm `AES`, and uses `GCMParameterSpec` with a 128-bit authentication tag. The byte-array decrypt path reads a 32-bit value from the input before performing GCM decryption and iterates over framed data. Thus, the `AuthConfirm.cipher` is handled by a real authenticated-encryption implementation, not a simple plaintext/base64 conversion.
+
+The precise encrypted-byte layout, IV extraction, length validation, and session-key derivation must be documented from the full method and helper routines before implementing an interoperable decryptor. Do not reuse or export any provisioned session keys.
+
+### 15.3 Certificate source
+
+`CarVerifier.getDefaultReader()` opens the packaged asset named `ccd.data`. `getCcdReader()` prefers this default asset when the configured data name is `ccd.data`; otherwise the code can fall back to a file-path reader. `readCarData()` reads through `CarVerificationData.Builder`, and the certificate send caller wraps the returned string's UTF-8 bytes as `CarCertificate.content`.
+
+This establishes the packaged asset as the default source for certificate data in this APK. It does not establish the asset's format or prove that the same value is suitable for another device/OEM. The asset contents are intentionally not copied into this document.
+
+### 15.4 Current protocol picture
+
+Evidence now supports this receiver-side path:
+
+1. The phone sends a UCar `AuthRequest` (outer auth method index 1).
+2. The receiver parses it and performs EC key negotiation / peer validation.
+3. The receiver sends `AuthResponse` (outer auth method index 2) using the incoming sequence ID.
+4. The phone sends `AuthConfirm` (outer auth method index 3).
+5. The receiver decrypts the confirmation using the session security manager, parses the resulting connection information, and notifies its observer.
+
+Separately, the certificate manager sends a UCar certificate message (certificate method index 1) on its connection callback after reading the certificate data. The exact relative ordering of this certificate send versus the authentication exchange remains to be established by tracing channel construction and lifecycle wiring.
+
+### 15.5 Implementation boundary
+
+The protocol schema and high-level message order are now better established, but this is still not sufficient to implement a compatible authentication exchange. Remaining prerequisites include the exact UCar frame transport over the relevant socket channel, message sequence and source/category values, certificate format and validation, key-pair/peer storage behavior, all GCM framing details, and error/retry transitions. Continue static analysis before writing auth code; do not replace any cryptographic routine with a stub that reports success.
