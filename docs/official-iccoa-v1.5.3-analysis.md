@@ -1,6 +1,6 @@
 # ICCOA v1.5.3 static-analysis notes
 
-Source artifact: `ICCOA - v1.5.3_202312071948_d8ad20b.apk`. This is a working evidence log. It distinguishes DEX metadata verified from the supplied APK from wire-level conclusions that require reliable instruction decompilation and runtime validation.
+Source artifact: `ICCOA - v1.5.3_202312071948_d8ad20b.apk`. This is an evidence log. It distinguishes observations from the supplied APK's DEX code from hypotheses that still need runtime validation.
 
 ## 1. Confirmed class and method inventory
 
@@ -37,17 +37,44 @@ The DEX method table confirms these signatures exist:
 - `UCarAuthProtocol.parseAuthResponseMessage(UCarMessage): AuthResponse`
 - `UCarAuthProtocol.parseAuthConfirmMessage(UCarMessage): AuthConfirm`
 
-This is a verified method inventory, not a full decompilation. It confirms where framing, CRC, AOA setup and authentication logic live; it does not establish their exact implementation.
+## 2. New bytecode-level findings
 
-## 2. Current receiver prototype versus official implementation
+The supplied DEX instruction bodies were inspected using a local instruction-width decoder. These findings are limited to direct call sites, constants and field accesses visible in those method bodies; this is not a full Java decompilation.
 
-The prototype currently implements standard AOA control requests 51/52/53, waits for USB re-enumeration, opens the first standard AOA interface, and performs a read-only Bulk IN test. It does not yet implement the UCar frame parser, CRC verification, channel demultiplexing, authentication, certificate handling, or request/response state machine.
+### 2.1 Message header
 
-The six-part serial preamble currently accepts user-entered values and uses project placeholders. A successful USB control transfer proves only that the transfer completed; it does not prove the phone recognizes the accessory identity or that values are valid OEM provisioning data.
+- `MessageHeader.writeBytesTo(ByteBuffer)` checks that at least `0x14` (20) bytes remain before writing the header.
+- The write path serializes `mLength`, `mSeqId`, and `mTimestamp` with `ByteBuffer.putInt`, then calls `writeCmdDescription`, writes a short field, computes CRC16 over the first 18 bytes, and writes the resulting short.
+- The byte-array overload uses the same 20-byte minimum, calls `ByteUtil.writeIntToBytes` for the three integer fields, calls `writeCmdDescription`, writes a short at offset 16, calls `Crc16.checksum(headerBytes, 0, 18)`, and writes the checksum at offset 18.
+- `createMessageHeaderFromBytes(byte[])` rejects buffers shorter than 20 bytes, reads integer fields from offsets 0, 4 and 8, reconstructs the command description, reads short fields at offsets 16 and 18, and compares the stored checksum with a calculated CRC16. A mismatch raises `ProtocolException` with an “Invalid header, checksum expect … actual …” message.
+- `updateLength(int)` rejects values below 20 and recalculates the checksum. `updateBodyLength(int)` rejects negative body lengths and sets the total length to body length plus 20 before recalculating the checksum.
+- `updateSeqId(int)` only permits sequence ID updates when the message type is `RES`, and rejects sequence IDs less than or equal to zero.
 
-## 3. Interpretation of the 2026-10-12 trace
+The three integer fields and CRC coverage are now evidenced by code paths. The exact byte order of the custom `ByteUtil` helpers and the meaning/encoding of every command-description field still need to be confirmed before writing a compatible serializer.
 
-After AOA request 53, the phone re-enumerated as `18D1:2D01`. The trace then read four packets from endpoint `0x81` on interface 0:
+### 2.2 CRC16
+
+Both overloads, `checksum(ByteBuffer, int, int)` and `checksum(byte[], int, int)`, use a shared `CRC16_TABLE` lookup table and process the requested range. The header writer explicitly invokes the byte-array overload with offset 0 and length 18. Do not substitute a generic CRC-16 variant yet: the initial state, reflected/non-reflected update details, and final representation must be reproduced and checked against known header bytes.
+
+### 2.3 Authentication message wrapper
+
+The official `UCarAuthProtocol` methods construct messages through a common builder:
+- `newAuthMessageBuilder()` sets the configured source device and category `AUTH`.
+- Auth request uses message type `REQ`; auth response uses `RES`; auth confirm uses `SEND`.
+- These builders set a method index and then call `buildProtobufMessage`. The response path additionally calls `updateSeqId`.
+- Parsing methods check the expected message type, get the message body, and invoke the corresponding protobuf `parseFrom` method. Protobuf parse failures are wrapped as `ProtocolException`.
+
+This establishes the wrapper structure, but not the numeric method indices, protobuf field semantics, certificate checks, or the full authentication state machine.
+
+### 2.4 AOA preamble builder
+
+`AOAPreambleBuilder.build` formats six encoded values using the literal template `%s;%s;%s;%s;%s;%s`. It calls `encodeGenericString` with length arguments 12 and 8 for generic fields, `encodeCarName` for the car-name field, `encodeVersion` for the version field, and then encodes the remaining generic fields. The car-name method uses UTF-8 byte length and truncates long values with an ellipsis; the version method splits a dotted version string and formats two numeric components.
+
+The six-part layout is verified. The correct OEM values and the exact role of each preamble field are not recovered by this alone; project placeholders must not be treated as valid Samsung/OEM provisioning data.
+
+## 3. What the captured USB bytes tell us
+
+The 2026-10-12 trace after AOA request 53 re-enumerated as `18D1:2D01`. It recorded four successful reads from endpoint `0x81` on interface 0:
 
 ```text
 00 00 00 01 00 00 00 0A
@@ -56,23 +83,25 @@ After AOA request 53, the phone re-enumerated as `18D1:2D01`. The trace then rea
 00 00 10 E1 FF FF FF FF 01 02
 ```
 
-The read completed with 4 successful reads (36 bytes), 10 timeouts and no other USB errors. This proves bytes were available on Bulk IN; it does not by itself prove they are valid ICCOA/UCar messages or that authentication failed. No phone-side Samsung Carlink confirmation appeared.
+Read result lengths were 8, 10, 8 and 10 bytes (36 bytes total), followed by 10 timeouts and no other USB errors. No single read is long enough to be a complete 20-byte `MessageHeader`. Pairing adjacent reads yields 18-byte sequences, which are still shorter than the header. This is evidence that the reads cannot be passed individually to `createMessageHeaderFromBytes`; it does not yet prove whether the data represents split UCar frames, another handshake layer, or fixed-size protocol records. A stream reassembler/parser must first account for the actual transport framing.
 
-Do not label these bytes as a specific command/error without verifying `MessageHeader.createMessageHeaderFromBytes`, `MessageHeader.writeBytesTo`, `ProtocolParser` and `Crc16` method bodies against the captured data.
+No Samsung Carlink confirmation appeared. These bytes must not be labelled as a specific command or error until the parser and transport framing are validated.
 
 ## 4. AOA interface selection
 
-For Android AOA PID `0x2D01`, the standard accessory interface is interface 0 and the second interface is ADB. The receiver's current choice of interface 0 / Bulk IN `0x81` is consistent with that layout. The trace also found Bulk OUT endpoint `0x01`, but the prototype intentionally does not write business data.
+For Android AOA PID `0x2D01`, the standard accessory interface is interface 0 and the second interface is ADB. The prototype's interface 0 / Bulk IN `0x81` selection is consistent with that layout. The trace also found Bulk OUT endpoint `0x01`; the prototype intentionally has not sent speculative business-protocol data.
 
-## 5. Next implementation steps
+## 5. Next steps
 
-1. Use a reliable DEX decompiler/disassembler to inspect the method bodies listed above, beginning with `MessageHeader.createMessageHeaderFromBytes`, both `Crc16.checksum` overloads, and `AOAPreambleBuilder.build`.
-2. Record verified header field offsets, endianness, message length semantics, checksum coverage and channel/message IDs.
-3. Test a read-only parser against the four captured packets. If the reads are chunks of a stream rather than complete frames, add a stream reassembler before parsing.
-4. Only after framing is validated, trace the authentication state machine and certificate handling.
-5. Implement documented protocol stages with explicit outcomes. Do not hard-code fabricated OEM IDs, pairing codes, private keys, certificates or guessed Bulk OUT commands.
-6. Keep raw HEX capture opt-in because future frames may contain identifiers or authentication material.
+1. Confirm the exact `ByteUtil.read/writeIntToBytes` and `read/writeShortToBytes` endianness.
+2. Reproduce the custom CRC16 routine and test it against a complete known-good header or an official receiver capture.
+3. Inspect `ProtocolParser` and `UCarMessageBuilder` to establish how the 20-byte header and body length delimit a stream.
+4. Add a read-only reassembler that preserves raw bytes and reports candidate header/checksum results without transmitting anything.
+5. Only after framing is validated, trace the authentication state machine and certificate handling.
+6. Do not hard-code fabricated OEM IDs, pairing codes, private keys, certificates or guessed Bulk OUT commands. Keep raw HEX capture opt-in because future frames may contain identifiers or authentication material.
 
 ## 6. Evidence boundary
 
-The supplied APK's DEX tables have been parsed locally far enough to verify class names, method names, descriptors and code-item locations. A reliable instruction-level decompilation has not yet been completed in this environment. Therefore exact header layout, CRC parameters, protobuf field mapping, certificate verification and authentication exchange remain unverified. The method inventory above is concrete progress, but it must not be presented as a recovered protocol specification.
+Confirmed from the supplied APK's DEX: class/method inventory, 20-byte minimum header, three integer fields at offsets 0/4/8, command-description writer call, a short at offset 16, CRC16 over bytes 0–17 stored at offset 18, total-length checks, and the auth message wrapper's type/category/builder calls.
+
+Still not confirmed: custom integer/short byte order, complete command-description field layout, exact CRC polynomial/initial/final details, numeric authentication method indices, protobuf field mapping, certificate validation, complete stream framing, and the full authentication exchange. No business-protocol code or APK was changed/built during this analysis step.
