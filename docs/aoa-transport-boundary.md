@@ -2,51 +2,48 @@
 
 Branch: `feature/usb-aoa-diagnostic-flow`
 
-This note narrows the next implementation step to the official APK's AOA read loop. It is deliberately an evidence checkpoint, not a guessed wire-format specification.
+This note records static DEX evidence from the supplied ICCOA v1.5.3 APK. It is not a claim that the byte order has been validated against a known-good runtime packet.
 
-## Confirmed from the supplied ICCOA v1.5.3 DEX scan
+## Confirmed AOA outer record structure
 
-1. `AOAConnectManager$AOAReadThread.run()` performs a Bulk IN read into an 8-byte buffer named `mMsgHead`.
-2. It decodes two 32-bit values by calling `ByteConvert.bytesToInt(mMsgHead, 0)` and `ByteConvert.bytesToInt(mMsgHead, 4)`.
-3. The loop then reads a separate body buffer through another Bulk IN operation.
-4. The resulting record is dispatched down one of two paths:
-   - a create-socket record reaches `handleCreateSocket(byte[], int)`;
-   - an ordinary channel record looks up a `SocketReadThread` using the channel ID, then passes the body to `writeData(byte[], int, int)`, which writes and flushes the channel output stream.
-5. `handleCreateSocket(byte[], int)` rejects records shorter than 10 bytes and reads fields at offsets 0, 4, 8 and 9. Its first two 32-bit values are logged as port and channel ID; the two following unsigned bytes are logged as socket type and channel message type.
+In `AOAConnectManager$AOAReadThread.run()V` in `classes5.dex`:
 
-## New instruction-level findings
+1. The first call to `AOAHostSetup.bulkTransferIn(byte[], int)` reads exactly 8 bytes into the `mMsgHead` array.
+2. The first 32-bit word is decoded by `ByteConvert.bytesToInt(mMsgHead, 0)`. It must be in the inclusive range 1..240. The value `1` is the create-socket discriminator; other accepted values are passed to `getReadThreadByChannelId(int)`.
+3. The second 32-bit word is decoded by `ByteConvert.bytesToInt(mMsgHead, 4)`. It must be positive and no greater than `0x04000000` (67,108,864 bytes, 64 MiB).
+4. The requested body buffer length is `Math.max(decodedLength, 8)`. The body is then read by a second call to `bulkTransferIn(body, requestedLength)`.
+5. The body dispatch uses the decoded first word as the channel ID and the decoded second word as the logical body length. For ordinary channel records, `SocketReadThread.writeData(body, 0, decodedLength)` is called. For channel ID 1, the body and decoded length are sent to `handleCreateSocket(byte[], int)`.
+6. If an ordinary channel ID does not resolve to a read thread, the implementation logs the missing channel and returns to the receive loop without calling `writeData`.
 
-The `run()V` code item in `classes5.dex` was located and the relevant branch operands were inspected:
+The lower-bound allocation behavior is noteworthy: for a declared body length from 1 through 7, the code requests an 8-byte body read but passes only the declared length to the downstream handler. This is a literal observation of the DEX, not a recommendation to reproduce it without validating the consequences.
 
-- The first Bulk IN call passes the `mMsgHead` byte array and literal length `8`.
-- The code invokes `bytesToInt(mMsgHead, 0)` and `bytesToInt(mMsgHead, 4)` into separate integer registers.
-- The first decoded integer is checked against `1` at the dispatch branch. If it equals `1`, the body is sent to `handleCreateSocket(byte[], int)`. Otherwise it is passed to `getReadThreadByChannelId(int)`, so this first word acts as the ordinary channel lookup key, with `1` reserved for the create-socket path.
-- The second decoded integer is checked for a positive value and against an upper-bound constant corresponding to 64 MiB before the body-buffer/read sequence. This strongly suggests it is length-related, but I am not yet treating it as the definitive body-length field because the full register flow into the allocation, second Bulk IN call, and `writeData` arguments still needs independent validation.
-- The loop treats a failed header read and failed body read as error paths; a zero-length header read returns to the loop. The current diagnostic code must continue to distinguish no-data/timeout from actual payload.
+## BulkTransferIn exact-read behavior
 
-These are static DEX observations, not a runtime-confirmed protocol specification. In particular, do not infer that one USB Bulk IN return necessarily equals one complete logical record.
+The implementation of `AOAHostSetup.bulkTransferIn(byte[], int)` was also inspected:
 
-## What is not established yet
+- It rejects use when the USB connection or IN endpoint is unavailable.
+- It repeatedly calls `bulkTransferInInternal(byte[], int, int)` in chunks of at most 16,384 bytes, tracking the offset and total bytes received.
+- A successful positive read advances the offset and the loop continues until the requested byte count is satisfied.
+- If the accumulated byte count is zero, it can return zero.
+- If the accumulated byte count is nonzero but differs from the requested count, it raises an `IOException` whose message reports expected and received byte counts. It does not intentionally return a short positive read as if the requested read had completed.
+- The internal method calls `UsbNative.bulkRead(...)`; on a negative result it logs the failure and may wait for USB reconnection and retry once. A failed retry raises an `IOException`. This means the Java helper wraps lower-level USB reads and should not be equated with a single USB packet or a single endpoint transfer.
 
-- The byte order of the two outer-header words from a known official capture.
-- The exact value used as the second Bulk IN request length and as the logical body length after all register moves are resolved.
-- Whether a USB Bulk IN return boundary always corresponds to one complete outer header/body segment, or whether the official loop retries/accumulates partial reads.
-- Whether the 64 MiB bound is an intended protocol maximum or merely defensive implementation logic.
+This evidence establishes exact-length behavior at the Java helper boundary. It does not establish that the OS/USB stack delivers an entire logical record in one physical USB packet; the helper itself can combine multiple lower-level reads.
 
-Do not treat the two endian renderings in the app's probe as proof of byte order or field meaning. The current diagnostic intentionally prints candidates only.
+## Byte order: still needs explicit confirmation
 
-## Next analysis gate
+The two words are decoded through `ByteConvert.bytesToInt`, but the byte order should be confirmed by inspecting that helper's arithmetic or by comparing a known official capture with its expected channel ID and length. The UI's big-endian/little-endian display remains diagnostic only.
 
-Before writing a reassembler, finish the register trace across the second `bulkTransferIn` and the `writeData` call, then document:
+## Validation limits and implementation decision
 
-1. The exact register passed as the second Bulk IN length.
-2. The array allocation length and any reuse/resizing logic.
-3. Whether the returned read count must equal the declared length or is passed through independently.
-4. The error, short-read, and loop-back behavior.
-5. Whether the underlying USB helper loops internally or performs one transfer per call.
+- The 64 MiB check is a limit imposed by this code path; do not assume it is a sensible receiver allocation limit. A new implementation should use a much smaller configurable safety cap until realistic legitimate record sizes are captured.
+- A bounded parser should not allocate from an untrusted length before validating both the field and local cap.
+- Because the official helper's contract is exact-length-or-error, tests should model partial underlying reads being accumulated, zero-byte reads, negative reads, failed retry, truncated body, over-limit length, and channel lookup miss.
+- Do not pass raw Bulk IN bytes directly to the UCar 20-byte message parser. The outer AOA record has its own 8-byte header and must be handled first.
+- No outbound auth/certificate data should be implemented on the strength of this framing analysis alone.
 
-Only after those operands and branches are reconciled should a bounded parser be introduced. Its tests must cover split header, split body, multiple records in one read, invalid/oversized lengths, truncated input, and the create-socket minimum length. Until then, keep raw Bulk IN capture read-only and do not feed it directly into the UCar 20-byte parser.
+## Next gate
 
-## Current implementation boundary
-
-`AoaTransportHeaderProbe` is a diagnostic display helper only: it reports raw bytes and both endian interpretations without assigning semantic field names. The raw Bulk IN path logs the captured bytes but does not parse them as UCar messages. This separation is intentional and must remain until the outer transport framing is proven.
+1. Inspect `ByteConvert.bytesToInt` to settle byte order.
+2. Inspect `handleCreateSocket(byte[], int)` and confirm its minimum record length and all field offsets from the method body.
+3. Implement and unit-test a pure-Java AOA framing component with a safe allocation cap, leaving USB I/O and authentication outside it.
