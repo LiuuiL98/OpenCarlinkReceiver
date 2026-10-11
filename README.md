@@ -73,3 +73,10 @@ APK 文件生成在 `app/build/outputs/apk/debug/app-debug.apk`.
 - 通过“导出/分享脱敏诊断日志”分享结果。不要在公开日志中附上真实配对码、完整六段 AOA 前导信息或未脱敏的 USB 序列号。
 
 **诊断结果限制：** 请求 53 被 USB 层接受只表示切换请求被接受，不代表手机已完成重新枚举，也不代表 ICCOA 配对、认证或投屏会话成功。当前版本仍未实现完整 ICCOA 业务协议。
+
+
+## USB 插拔事件诊断（0.2.3）
+
+本版本增加了 USB 主机侧的 `ACTION_USB_DEVICE_ATTACHED` / `ACTION_USB_DEVICE_DETACHED` 事件记录。执行 AOA 请求 53 或测试期间切换手机 USB 调试后，请观察日志中是否出现 `USB_DETACH` 与 `USB_ATTACH`，以及重新接入设备的 VID/PID 是否变化。
+
+USB 断开广播本身不区分原因：它可能是用户拔线、USB 功能重新配置、AOA 模式切换或系统重枚举。请结合操作时间和重新接入后的 VID/PID 判断，不要把单次 detach 直接解释为 ICCOA 认证失败。为了让 AOA 重新枚举后还能继续采集事件，诊断会话不会因为一次 detach 自动关闭。
