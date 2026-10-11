@@ -6,13 +6,13 @@ import static org.junit.Assert.*;
 
 public class AoaRecordReaderTest {
     @Test public void readsHeaderThenExactBodyForNormalChannel() throws Exception {
-        final byte[] body = new byte[] {10, 11, 12, 13};
+        byte[] body = new byte[] {10, 11, 12, 13, 0, 0, 0, 0};
         AoaRecordReader.Record record = AoaRecordReader.readOne(
-                new ScriptedSource(new byte[] {0, 0, 0, 2, 0, 0, 0, 4}, body, null), 1024);
+                new ScriptedSource(new byte[] {0, 0, 0, 2, 0, 0, 0, 4}, body, null, null), 1024);
         assertNotNull(record);
         assertEquals(2, record.header.channelId);
         assertEquals(4, record.logicalBodyLength);
-        assertEquals(8, record.body.length); // official minimum read length
+        assertEquals(8, record.body.length);
         assertFalse(record.isCreateSocketRecord());
         assertNull(record.createSocket);
         assertEquals(10, record.body[0]);
@@ -22,7 +22,7 @@ public class AoaRecordReaderTest {
     @Test public void decodesCreateSocketBodyAfterExactRead() throws Exception {
         byte[] body = new byte[] {0, 0, 0x1f, (byte)0x90, 0, 0, 0, 7, 2, 3};
         AoaRecordReader.Record record = AoaRecordReader.readOne(
-                new ScriptedSource(new byte[] {0, 0, 0, 1, 0, 0, 0, 10}, body, null), 1024);
+                new ScriptedSource(new byte[] {0, 0, 0, 1, 0, 0, 0, 10}, body, null, null), 1024);
         assertTrue(record.isCreateSocketRecord());
         assertNotNull(record.createSocket);
         assertEquals(8080, record.createSocket.port);
@@ -32,18 +32,18 @@ public class AoaRecordReaderTest {
     }
 
     @Test public void returnsNullOnlyWhenNoHeaderStarts() throws Exception {
-        assertNull(AoaRecordReader.readOne(new ScriptedSource(null, null, null), 1024));
+        assertNull(AoaRecordReader.readOne(new ScriptedSource(null, null, null, null), 1024));
     }
 
     @Test public void rejectsPartialHeaderAndPartialBody() throws Exception {
-        assertReadFailure(new ScriptedSource(new byte[8], null, 7), 1024);
+        assertReadFailure(new ScriptedSource(new byte[8], null, 7, null), 1024);
         assertReadFailure(new ScriptedSource(new byte[] {0, 0, 0, 2, 0, 0, 0, 9},
-                new byte[9], 8), 1024);
+                new byte[9], null, 8), 1024);
     }
 
     @Test public void rejectsOversizedDeclaredBodyBeforeReadingBody() throws Exception {
         ScriptedSource source = new ScriptedSource(
-                new byte[] {0, 0, 0, 2, 0, 0, 0x10, 1}, null, null);
+                new byte[] {0, 0, 0, 2, 0, 0, 0x10, 1}, null, null, null);
         try {
             AoaRecordReader.readOne(source, 1024);
             fail("expected local cap rejection");
@@ -64,12 +64,15 @@ public class AoaRecordReaderTest {
     private static final class ScriptedSource implements AoaRecordReader.ExactLengthSource {
         final byte[] header;
         final byte[] body;
+        final Integer forcedFirstResult;
         final Integer forcedSecondResult;
         int calls;
 
-        ScriptedSource(byte[] header, byte[] body, Integer forcedSecondResult) {
+        ScriptedSource(byte[] header, byte[] body, Integer forcedFirstResult,
+                       Integer forcedSecondResult) {
             this.header = header;
             this.body = body;
+            this.forcedFirstResult = forcedFirstResult;
             this.forcedSecondResult = forcedSecondResult;
         }
 
@@ -77,8 +80,8 @@ public class AoaRecordReaderTest {
             calls++;
             byte[] source = calls == 1 ? header : body;
             if (source == null) return 0;
-            int reported = calls == 2 && forcedSecondResult != null
-                    ? forcedSecondResult : source.length;
+            Integer forced = calls == 1 ? forcedFirstResult : forcedSecondResult;
+            int reported = forced == null ? source.length : forced;
             if (reported == requestedLength && source.length >= requestedLength) {
                 System.arraycopy(source, 0, destination, 0, requestedLength);
             }
