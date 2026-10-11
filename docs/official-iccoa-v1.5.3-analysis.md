@@ -112,3 +112,29 @@ Still not confirmed: custom integer/short byte order, complete command-descripti
 A second bytecode pass inspected `ByteUtil.readIntFromBytes`, `readShortFromBytes`, `writeIntToBytes` and `writeShortToBytes`. The read paths combine bytes using shifts of 24, 16, 8 and 0 bits for integers, and 8 and 0 bits for shorts; the write paths extract those same high-to-low byte positions. This confirms **big-endian/network byte order** for these protocol integer and short helpers.
 
 Consequently, the first integer in a complete 20-byte header is decoded as a big-endian total length, the next as sequence ID, and the third as timestamp. This does not make the current 8/10-byte reads complete headers: they still need transport-level framing/reassembly before parsing.
+
+
+## 8. Follow-up: identify the actual transport dispatcher
+
+The DEX method inventory shows that `com.ucar.protocol.ProtocolParser` is **not** the stream/frame parser suggested by its class name. Its methods are limited to version conversion helpers: `getMajorVersion`, `getMinorVersion`, `parseVersionToByteArray`, and `parseVersionToString`. It should not be treated as the missing USB frame parser.
+
+The official APK's `com.ucar.connect.aoa.AOAConnectManager` has a different, transport-oriented surface:
+- `handleCreateSocket(byte[], int)`
+- `getReadThreadByChannelId(int)`
+- `startClientSocketThread(int, String, int, int)`
+- `startServerSocketThread(int, String, int)`
+- `checkNetworkReady()`
+- `notifyDisconnected()`
+
+Its nested `AOAReadThread.run()` reads the AOA channel, while the manager contains socket creation and per-channel read-thread lookup. This suggests the AOA transport may be used to bootstrap or carry channel/socket setup data, after which additional traffic is routed by channel. This is a **structural inference from method names and call surfaces**, not proof of the exact wire message layout.
+
+### Updated next target
+
+Prioritize the actual read path and dispatch chain:
+1. `AOAConnectManager$AOAReadThread.run()`
+2. the private byte-read method called by that thread
+3. `AOAConnectManager.handleCreateSocket(byte[], int)`
+4. `MessageHeader.createMessageHeaderFromBytes(byte[])`
+5. `UCarMessageBuilder` / message body serialization references if present in the APK
+
+Do not build a generic parser based solely on the class name `ProtocolParser`. First recover the call chain that takes raw USB bytes and decides whether they are headers, socket-control records, or channel payloads.
