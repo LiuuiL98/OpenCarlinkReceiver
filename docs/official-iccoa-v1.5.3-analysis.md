@@ -1087,3 +1087,20 @@ The header test builds a synthetic header and computes/stores its checksum using
 ### Validation status
 
 These files have been committed, but a GitHub Actions run has not been inspected in this step. Do not consider the test suite or APK build confirmed until CI reports success. The helper is not yet wired into the live USB receive path or a complete UCar message parser.
+
+## 43. Incremental parser and read-only USB diagnostics
+
+The receiver now has an initial `UCarStreamParser` and unit tests for split chunks, multiple frames in one chunk, checksum rejection/resynchronization, null input and invalid maximum-frame configuration. The parser expects the total frame length at bytes 0–3 in big-endian order, then validates the 20-byte header CRC and waits for the complete frame.
+
+**Important limitation:** big-endian total-length interpretation is currently an implementation hypothesis based on the `ByteBuffer.putInt` serialization path; it has not yet been cross-checked against the byte-array `ByteUtil.writeIntToBytes` implementation or a known-good full frame. Therefore the parser is only an exploratory candidate detector, not authoritative protocol decoding.
+
+The USB Bulk IN diagnostic path feeds each received chunk to the parser and logs candidate frame count, invalid length candidates, invalid checksum candidates and pending bytes. It does not write to Bulk OUT. Since the AOA transport may prepend a separate record/header, zero candidate frames do not prove that UCar messages are absent; a candidate frame does not prove that the transport framing is correct.
+
+CI run for the parser implementation and its tests:
+https://github.com/LiuuiL98/OpenCarlinkReceiver/actions/runs/38183448506
+
+### Next validation gate
+
+1. Inspect `ByteUtil.readIntFromBytes` and `writeIntToBytes` in the supplied APK DEX and compare array serialization with `ByteBuffer.putInt`.
+2. Inspect the official `ProtocolParser` and `AOAReadThread` framing path to determine whether the observed 8-byte prefix is stripped before UCar parsing.
+3. Obtain a complete, non-sensitive official frame before treating any parser result as protocol confirmation.
