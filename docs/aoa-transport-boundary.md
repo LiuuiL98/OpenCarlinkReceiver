@@ -51,3 +51,15 @@ The official behavior for declared lengths 1..7 requests 8 bytes but passes the 
 1. Inspect `handleCreateSocket(byte[], int)` instruction by instruction and confirm the record minimum and field offsets.
 2. Select and document a conservative local allocation cap for the actual receiver use case.
 3. Add a separate bounded body-read abstraction with tests for short reads, failed reads, oversized lengths, and channel lookup misses, keeping USB I/O and authentication outside the parser.
+
+## New pure-Java body-read policy
+
+Added `AoaBodyReadPolicy` as a separate helper so framing decisions can be tested without USB hardware:
+
+- `requestedReadLength(header, localBodyLimit)` validates the local cap before returning the official requested length, `max(declaredBodyLength, 8)`.
+- `allocate(header, localBodyLimit)` performs allocation only after that validation. It does not choose a production cap for the application; the caller must make that decision explicitly.
+- `requireCompleteRead(requestedLength, returnedLength)` rejects zero, negative, and short return values before downstream dispatch. This models the official helper contract at its Java API boundary; the USB implementation itself remains responsible for retries and lower-level chunk accumulation.
+
+Unit tests cover normal body lengths, the official 8-byte minimum for declared lengths below 8, local-cap rejection before allocation, invalid caps, and exact versus incomplete read counts.
+
+This is not yet a stream reassembler and is not wired into the UI's raw Bulk IN diagnostic. A safe next step is to finish reviewing `handleCreateSocket` and then introduce an explicit record reader around a known transport boundary, rather than guessing at how arbitrary USB chunks should be joined.
