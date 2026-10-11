@@ -1,7 +1,5 @@
 package com.opencarlink.receiver;
 
-import com.opencarlink.receiver.protocol.UCarStreamParser;
-
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.app.PendingIntent;
@@ -721,9 +719,7 @@ public class MainActivity extends Activity {
                                 int successfulReads = 0;
                                 int timeoutOrNoData = 0;
                                 int errors = 0;
-                                // Exploratory only: current AOA reads may contain a transport prefix
-                                // rather than raw UCar frames. Never transmit data from this parser.
-                                UCarStreamParser ucarParser = new UCarStreamParser();
+                                // AOA Bulk IN is the outer transport layer; UCar framing belongs after AOA header handling and channel dispatch.
                                 StringBuilder sampleHex = new StringBuilder();
                                 long firstDataAtMs = -1;
                                 long startedAtMs = android.os.SystemClock.elapsedRealtime();
@@ -751,11 +747,6 @@ public class MainActivity extends Activity {
                                         successfulReads++;
                                         byte[] receivedChunk = new byte[count];
                                         System.arraycopy(buffer, 0, receivedChunk, 0, count);
-                                        java.util.List<byte[]> candidateFrames = ucarParser.feed(receivedChunk);
-                                        if (!candidateFrames.isEmpty()) {
-                                            appendTraceLine("UCAR_CANDIDATE_FRAME count=" + candidateFrames.size()
-                                                    + " source=raw_bulk_in exploratory=true");
-                                        }
                                         appendTraceLine("BULK_IN_PACKET index=" + successfulReads
                                                 + " elapsed_ms=" + elapsedMs
                                                 + " requested_length=" + buffer.length
@@ -781,25 +772,15 @@ public class MainActivity extends Activity {
                                         + (android.os.SystemClock.elapsedRealtime() - startedAtMs)
                                         + " reads=" + successfulReads + " bytes=" + totalBytes
                                         + " no_data=" + timeoutOrNoData + " errors=" + errors
-                                        + " ucar_candidate_frames=" + ucarParser.getParsedFrames()
-                                        + " ucar_invalid_lengths=" + ucarParser.getInvalidLengthCandidates()
-                                        + " ucar_invalid_checksums=" + ucarParser.getInvalidChecksumCandidates()
-                                        + " ucar_pending_bytes=" + ucarParser.getPendingByteCount()
-                                        + " note=raw_bulk_in_may_include_transport_framing");
+                                        + " ucar_parser=not_applied_at_raw_bulk_in"
+                                        + " note=aoa_transport_header_and_channel_dispatch_must_be_resolved");
                                 result = "AOA Bulk IN 只读测试结束（最长约 5 秒）。接口=" + claimedInterface.getId()
                                         + "，端点=" + hex2(inEndpoint.getAddress())
                                         + "，成功读取次数=" + successfulReads
                                         + "，收到字节=" + totalBytes
                                         + "，无数据/超时次数=" + timeoutOrNoData
                                         + "，其他错误次数=" + errors
-                                        + "，UCar候选完整帧=" + ucarParser.getParsedFrames()
-                                        + "，候选无效长度=" + ucarParser.getInvalidLengthCandidates()
-                                        + "，候选CRC错误=" + ucarParser.getInvalidChecksumCandidates()
-                                        + "，待处理字节=" + ucarParser.getPendingByteCount()
-                                        + "（仅对原始Bulk IN数据做探索性检查，未确认传输前缀）"
-                                        + (firstDataAtMs >= 0 ? "，首次数据延迟=" + (firstDataAtMs - (deadline - 5000)) + "ms" : "")
-                                        + (sampleHex.length() > 0 ? "，首批数据 HEX（最多约 512 字节）=" + sampleHex : "，HEX 样本=无（本次未收到数据）")
-                                        + "。本测试未向 Bulk OUT 写入任何数据；没有收到数据不代表 ICCOA 不存在。";
+                                        + "。UCar 帧解析未在原始 Bulk IN 层启用：官方协议先经过 AOA 传输头和通道分发。";
                             }
                         }
                     }
