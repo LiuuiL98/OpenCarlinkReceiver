@@ -749,3 +749,19 @@ The static initializer's lookup table was inspected directly in the DEX code uni
 4. Validate against at least one complete, authorized official header captured at runtime; a table prefix alone is insufficient.
 
 This is a stronger result than class-name inference, but remains a static-analysis conclusion pending arithmetic and frame validation.
+
+
+## 27. Parent call sites: certificate startup is part of the vehicle adapter channel sequence
+
+The caller scan now identifies concrete parent methods for two of the service start calls:
+
+- `UCarAdapter.startUCarChannel(String)` creates/starts `ControlManager`, starts `SensorManager`, then invokes `CarCertManager.start(String)`, and later starts `UCarAudioManager`. This establishes that certificate-channel startup is explicitly included in the adapter's channel-start routine.
+- `ShareLinkService.startAuthService(String)` is a separate method. It stops an existing `UCarAuthService` if present, constructs a new `UCarAuthService` with context, observer, two integer parameters, a string, and a boolean, then invokes `UCarAuthService.start(String)`.
+
+The two start paths therefore live under separate parent methods: certificate startup is in `UCarAdapter.startUCarChannel`, while authentication startup is in `ShareLinkService.startAuthService`. This alone does not prove which parent is called first at runtime; the caller of `startAuthService` is an accessor/forwarder (`ShareLinkService.access$1900`) in the DEX invoke scan, so the next trace must follow the enclosing service's state/event callbacks to determine actual ordering.
+
+### Runtime validation plan
+
+When collecting a permitted test trace, record timestamps for: AOA accessory connection, `UCarAdapter.startUCarChannel`, `CarCertManager` channel `onConnect`, `ShareLinkService.startAuthService`, `UCarAuthService` channel `onConnect`, first AuthRequest/AuthResponse, AuthConfirm handling, and certificate message send. These events distinguish source-code call ordering from asynchronous socket-connect ordering.
+
+Do not change the receiver to send authentication or certificate payloads merely because a candidate port is known. First establish which side opens each socket and the observed create-socket messages on the AOA bridge.
