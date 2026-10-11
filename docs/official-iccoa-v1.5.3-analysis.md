@@ -1086,15 +1086,15 @@ The header test builds a synthetic header and computes/stores its checksum using
 
 ### Validation status
 
-These files have been committed, but a GitHub Actions run has not been inspected in this step. Do not consider the test suite or APK build confirmed until CI reports success. The helper is not yet wired into the live USB receive path or a complete UCar message parser.
+At the time of the original note, CI had not yet been checked. The subsequent run `38183448506` passed unit tests and the debug APK build. The helper was later used by an exploratory stream parser; see the corrected transport-layer note in section 44.
 
 ## 43. Incremental parser and read-only USB diagnostics
 
 The receiver now has an initial `UCarStreamParser` and unit tests for split chunks, multiple frames in one chunk, checksum rejection/resynchronization, null input and invalid maximum-frame configuration. The parser expects the total frame length at bytes 0–3 in big-endian order, then validates the 20-byte header CRC and waits for the complete frame.
 
-**Important limitation:** big-endian total-length interpretation is currently an implementation hypothesis based on the `ByteBuffer.putInt` serialization path; it has not yet been cross-checked against the byte-array `ByteUtil.writeIntToBytes` implementation or a known-good full frame. Therefore the parser is only an exploratory candidate detector, not authoritative protocol decoding.
+**Important limitation:** DEX inspection documented earlier in section 7 confirms `ByteUtil.readIntFromBytes` and `writeIntToBytes` use high-to-low byte order, consistent with big-endian. However, a real official full-frame golden sample is still unavailable, so synthetic parser tests do not prove the parser matches actual traffic.
 
-The USB Bulk IN diagnostic path feeds each received chunk to the parser and logs candidate frame count, invalid length candidates, invalid checksum candidates and pending bytes. It does not write to Bulk OUT. Since the AOA transport may prepend a separate record/header, zero candidate frames do not prove that UCar messages are absent; a candidate frame does not prove that the transport framing is correct.
+This was the initial diagnostic wiring. It has since been removed: the raw USB Bulk IN loop no longer feeds chunks to `UCarStreamParser`, because it is upstream of AOA's 8-byte transport-header handling and per-channel dispatch. The USB diagnostic remains read-only.
 
 CI run for the parser implementation and its tests:
 https://github.com/LiuuiL98/OpenCarlinkReceiver/actions/runs/38183448506
@@ -1104,3 +1104,20 @@ https://github.com/LiuuiL98/OpenCarlinkReceiver/actions/runs/38183448506
 1. Inspect `ByteUtil.readIntFromBytes` and `writeIntToBytes` in the supplied APK DEX and compare array serialization with `ByteBuffer.putInt`.
 2. Inspect the official `ProtocolParser` and `AOAReadThread` framing path to determine whether the observed 8-byte prefix is stripped before UCar parsing.
 3. Obtain a complete, non-sensitive official frame before treating any parser result as protocol confirmation.
+
+
+## 44. Corrected parser boundary: AOA transport before UCar framing
+
+The next bytecode review confirms that the earlier parser integration point was at the wrong layer. In the official APK, `AOAConnectManager$AOAReadThread.run()` reads an 8-byte transport header into `mMsgHead`, decodes two integer values with `ByteConvert.bytesToInt`, then reads a separate body and routes it through the channel/socket bridge. `handleCreateSocket(byte[], int)` interprets the create-socket record separately, including fields at offsets 8 and 9. This is not equivalent to passing each raw USB Bulk IN packet directly into a UCar stream parser.
+
+Consequences for this receiver:
+
+- Raw Bulk IN logging stays read-only and records transport-level observations only.
+- `UCarStreamParser` remains a standalone parser utility with synthetic tests, but it is **not** invoked from the raw USB receive loop.
+- The next implementation target is a dedicated AOA transport reassembler/decoder, based on verified semantics for the two 32-bit header fields and body-read length. Do not assume their meaning from one sample or from field names.
+- Only after a body has been shown to represent the relevant channel payload should UCar header parsing be attempted.
+- No authentication, certificate, or outbound protocol response should be implemented until this boundary is established from DEX behavior and non-sensitive runtime traces.
+
+The byte-array integer helpers are documented as big-endian in section 7, so that is no longer the immediate blocker. The remaining blocker is the exact AOA transport header semantics and how the reader handles partial reads, declared body lengths, channel IDs, and create-socket records.
+
+Source-of-truth limitation: the supplied APK's static DEX behavior supports this layer separation, but no complete, non-sensitive runtime frame has yet been captured to validate the receiver's live interpretation.
