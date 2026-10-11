@@ -38,7 +38,8 @@ public final class AoaTransportHeaderProbe {
     }
 
     public static boolean isAvailable(byte[] data, int returnedLength) {
-        return data != null && data.length >= HEADER_LENGTH && returnedLength >= HEADER_LENGTH;
+        return data != null && returnedLength >= HEADER_LENGTH
+                && returnedLength <= data.length && data.length >= HEADER_LENGTH;
     }
 
     /**
