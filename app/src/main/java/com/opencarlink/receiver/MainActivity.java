@@ -1,5 +1,7 @@
 package com.opencarlink.receiver;
 
+import com.opencarlink.receiver.protocol.AoaTransportHeaderProbe;
+
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.app.PendingIntent;
@@ -659,26 +661,12 @@ public class MainActivity extends Activity {
      * and does not assign field names or infer a body length.
      */
     private String probeAoaTransportHeader(byte[] data, int length) {
-        if (data == null || length < 8 || data.length < 8) return "unavailable";
-        long firstBe = ((long)(data[0] & 0xFF) << 24)
-                | ((long)(data[1] & 0xFF) << 16)
-                | ((long)(data[2] & 0xFF) << 8)
-                | (long)(data[3] & 0xFF);
-        long secondBe = ((long)(data[4] & 0xFF) << 24)
-                | ((long)(data[5] & 0xFF) << 16)
-                | ((long)(data[6] & 0xFF) << 8)
-                | (long)(data[7] & 0xFF);
-        long firstLe = ((long)(data[3] & 0xFF) << 24)
-                | ((long)(data[2] & 0xFF) << 16)
-                | ((long)(data[1] & 0xFF) << 8)
-                | (long)(data[0] & 0xFF);
-        long secondLe = ((long)(data[7] & 0xFF) << 24)
-                | ((long)(data[6] & 0xFF) << 16)
-                | ((long)(data[5] & 0xFF) << 8)
-                | (long)(data[4] & 0xFF);
+        if (!AoaTransportHeaderProbe.isAvailable(data, length)) return "unavailable";
         return "raw8=" + bytesToHex(data, 8)
-                + ",u32be=[" + firstBe + "," + secondBe + "]"
-                + ",u32le=[" + firstLe + "," + secondLe + "]";
+                + ",u32be=[" + AoaTransportHeaderProbe.wordBigEndian(data, 0)
+                + "," + AoaTransportHeaderProbe.wordBigEndian(data, 4) + "]"
+                + ",u32le=[" + AoaTransportHeaderProbe.wordLittleEndian(data, 0)
+                + "," + AoaTransportHeaderProbe.wordLittleEndian(data, 4) + "]";
     }
 
     private void testAoaBulkRead(final UsbDevice device) {
