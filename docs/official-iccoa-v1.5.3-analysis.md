@@ -831,3 +831,41 @@ The DEX invoke scan of `FutureRequestManager` now confirms the key used for pend
 - Exact `isSendSyncMessage` branch condition and behavior.
 - Whether the configured handler can retain or asynchronously use a message after the read task's release point.
 - CRC initial accumulator and update arithmetic, plus runtime verification of channel ports.
+
+
+## 31. Receive-path implications for a compatible implementation
+
+This section narrows the next implementation boundary using the invoke references found in `classes7.dex`. It is still static analysis of DEX call sites, not a live capture of an authenticated ICCOA session.
+
+### Confirmed call chain
+
+```text
+SocketChannelReadTask
+  ├─ parse/read a UCarMessage
+  ├─ FutureRequestManager.complete(message)
+  │    ├─ key = message.getSeqId()
+  │    ├─ remove matching RequestFuture from pending map
+  │    └─ if found: RequestFuture.handleMessage(message)
+  │          ├─ callback.convertMessage(message)
+  │          ├─ check cancellation / set future result
+  │          ├─ callback.completed(result)
+  │          └─ message.release()
+  ├─ SocketChannel.onMessage(message)
+  │    ├─ configured MessageHandler.onMessage(message)
+  │    └─ evaluate UCarMessage.isSendSyncMessage(message)
+  └─ message.release() at the read-task dispatch lambda
+```
+
+The call sites establish this ordering, but not every branch's runtime reachability. In particular, do not assume the two visible `release()` calls imply a double-free: the object may implement pooled/idempotent release semantics, and the exact ownership contract has not been established. Conversely, a new receiver should define message ownership explicitly and avoid retaining a pooled message after release.
+
+### Consequences for OpenCarlinkReceiver
+
+- Keep request/response correlation separate from general message dispatch. A response can satisfy a pending request and still pass through the channel's registered handler.
+- Use a bounded timeout for every request and remove timed-out/cancelled requests from both correlation and timeout structures.
+- On disconnect, clear pending requests and fail or cancel their futures; do not allow a previous USB session's responses to satisfy requests from a later session.
+- Copy the bytes or parse the protobuf synchronously before releasing/recycling a message if work must continue asynchronously.
+- Do not yet reproduce the `isSendSyncMessage` callback branch from names alone. The exact predicate and lambda body still need instruction-level control-flow decoding.
+
+### Remaining evidence gap
+
+The scan confirms invoked methods and order as represented in the read-task lambda, but does not yet establish the full branch graph, callback executor, sequence-ID allocation policy, or whether sequence IDs can be reused across channels. Those should be verified before implementing protocol-level request correlation.
