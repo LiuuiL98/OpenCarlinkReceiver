@@ -43,12 +43,24 @@ public final class AoaTransportHeaderProbe {
     }
 
     /**
-     * Decode one already-reassembled 8-byte AOA header. The caller must not
-     * use this on arbitrary raw USB chunks unless the header boundary is known.
+     * Decode using the official code's length ceiling. This method validates
+     * the header but is not a recommendation to allocate a buffer that large.
      */
     public static Header decode(byte[] data, int returnedLength) {
+        return decode(data, returnedLength, OFFICIAL_MAX_BODY_LENGTH);
+    }
+
+    /**
+     * Decode a complete header while also enforcing a caller-selected local
+     * body-size cap before any body allocation. The local cap cannot exceed
+     * the official implementation's observed 64 MiB ceiling.
+     */
+    public static Header decode(byte[] data, int returnedLength, int localBodyLimit) {
         if (!isAvailable(data, returnedLength)) {
             throw new IllegalArgumentException("need a complete 8-byte AOA header");
+        }
+        if (localBodyLimit < MIN_BODY_LENGTH || localBodyLimit > OFFICIAL_MAX_BODY_LENGTH) {
+            throw new IllegalArgumentException("local body limit out of range: " + localBodyLimit);
         }
         long channelWord = wordBigEndian(data, 0);
         long lengthWord = wordBigEndian(data, 4);
@@ -56,7 +68,10 @@ public final class AoaTransportHeaderProbe {
             throw new IllegalArgumentException("channel ID out of range: " + channelWord);
         }
         if (lengthWord < MIN_BODY_LENGTH || lengthWord > OFFICIAL_MAX_BODY_LENGTH) {
-            throw new IllegalArgumentException("body length out of range: " + lengthWord);
+            throw new IllegalArgumentException("body length out of official range: " + lengthWord);
+        }
+        if (lengthWord > localBodyLimit) {
+            throw new IllegalArgumentException("body length exceeds local limit: " + lengthWord);
         }
         return new Header((int) channelWord, (int) lengthWord);
     }
