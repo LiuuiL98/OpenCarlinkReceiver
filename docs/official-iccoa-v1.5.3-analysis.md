@@ -413,3 +413,29 @@ Separately, the certificate manager sends a UCar certificate message (certificat
 ### 15.5 Implementation boundary
 
 The protocol schema and high-level message order are now better established, but this is still not sufficient to implement a compatible authentication exchange. Remaining prerequisites include the exact UCar frame transport over the relevant socket channel, message sequence and source/category values, certificate format and validation, key-pair/peer storage behavior, all GCM framing details, and error/retry transitions. Continue static analysis before writing auth code; do not replace any cryptographic routine with a stub that reports success.
+
+
+## 16. ConnectChannel transport investigation: current evidence and next gating question
+
+A fresh inventory of the supplied APK's DEX files confirms that the following implementation classes are packaged (the class descriptors are present in the DEX string/type tables):
+- `com.share.connect.channel.ConnectChannel` (in `classes4.dex` and `classes5.dex`);
+- `com.share.connect.security.ServerKeyNegotiator` and `UCarAuthService` (including generated callback/lambda classes, in `classes5.dex`);
+- `com.share.connect.utils.CarVerifier` (in `classes4.dex` / `classes5.dex`);
+- `com.ucar.protocol.UCarMessageBuilder` and `com.ucar.protocol.security.SecurityManager` (in `classes7.dex`, with related references in other DEX files).
+
+This confirms that the source-level transport, auth, certificate, and message-builder layers are spread across multiple DEX files; a single-DEX string scan is insufficient to establish a complete call graph.
+
+### What is and is not established for ConnectChannel
+
+From the already inspected auth-service call site, `ConnectChannel.send(UCarMessage, callback)` is the outbound API used to send an `AuthResponse`. From the AOA manager path, channel payload bytes are forwarded to per-channel socket threads. These two facts do **not yet prove** that `ConnectChannel` itself reads directly from the AOA USB endpoint: it may be layered over one of the socket/proxy channels created by the AOA manager.
+
+The next decisive static-analysis task is to inspect `ConnectChannel`'s constructor and send/receive methods, then follow the constructor's channel/stream argument back to its factory. This should establish:
+1. whether it owns a TCP/local socket, a stream abstraction, or another transport;
+2. how the 20-byte UCar header is accumulated from reads and how the declared total length is enforced;
+3. whether the message receiver validates CRC before dispatch;
+4. how source device, category, message type, method index, and sequence ID are assigned;
+5. which callback routes a decoded `UCarMessage` to `UCarAuthService`.
+
+### Implementation decision
+
+Until these are established, do not put UCar framing directly into `MainActivity`'s USB Bulk IN loop. Keep the current diagnostic receiver read-only. The eventual architecture should separate USB/ AOА transport framing, channel/socket bridging, and UCar message framing so each can be tested independently.
