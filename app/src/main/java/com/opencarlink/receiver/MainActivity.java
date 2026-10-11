@@ -408,12 +408,12 @@ public class MainActivity extends Activity {
     }
 
     private void clearDiagnosticLog() {
+        setUsbStatus("已清除本机保存的诊断日志。重新测试前请开始新会话。");
         diagnosticLog.setLength(0);
         diagnosticSessionActive = false;
         diagnosticSessionId = "未开始";
         getSharedPreferences(PREFS_DIAGNOSTICS, MODE_PRIVATE).edit().remove(PREF_EVENT_LOG).apply();
         if (diagnosticEventLog != null) diagnosticEventLog.setText("尚无阶段日志。");
-        setUsbStatus("已清除本机保存的诊断日志。重新测试前请开始新会话。");
     }
 
     private String summarizeBulkReadResult(String result) {
@@ -827,7 +827,7 @@ public class MainActivity extends Activity {
     private void setUsbStatus(String message) {
         if (message != null) {
             String stage = message.toLowerCase(Locale.ROOT).contains("aoa") ? "AOA_STATUS" : "USB_STATUS";
-            recordEvent(stage, message);
+            recordEvent(stage, summarizeBulkReadResult(message));
         }
         if (usbTestStatus != null) usbTestStatus.setText("USB 连接测试：" + message);
     }
