@@ -22,6 +22,7 @@ import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
+import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
@@ -38,6 +39,7 @@ public class MainActivity extends Activity {
     private LinearLayout root;
     private TextView diagnostics;
     private TextView usbTestStatus;
+    private EditText aoaManufacturerInput, aoaModelInput, aoaDescriptionInput, aoaVersionInput, aoaUriInput, aoaSerialInput;
     private UsbManager usbManager;
     private boolean receiverRegistered;
     private final BroadcastReceiver usbPermissionReceiver = new BroadcastReceiver() {
@@ -112,7 +114,7 @@ public class MainActivity extends Activity {
         root.addView(title, matchWrap());
 
         TextView subtitle = new TextView(this);
-        subtitle.setText("车机兼容性诊断工具 · 版本 0.1.7");
+        subtitle.setText("车机兼容性诊断工具 · 版本 0.1.8");
         subtitle.setTextColor(0xFFB7C5D3);
         subtitle.setTextSize(13);
         subtitle.setPadding(0, dp(6), 0, dp(18));
@@ -142,6 +144,39 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams aoaParams = matchWrap();
         aoaParams.topMargin = dp(8);
         root.addView(aoaButton, aoaParams);
+
+
+        TextView identityTitle = new TextView(this);
+        identityTitle.setText("AOA 配件身份（用于对端应用匹配）");
+        identityTitle.setTextColor(0xFFFFFFFF);
+        identityTitle.setTextSize(16);
+        identityTitle.setPadding(0, dp(12), 0, dp(4));
+        root.addView(identityTitle, matchWrap());
+        TextView identityHint = new TextView(this);
+        identityHint.setText("目前尚未从官方 APK 中确认这些字段的实际值。修改后只影响下一次 AOA 模式切换；不要把猜测值当成官方配置。");
+        identityHint.setTextColor(0xFFFFD166);
+        identityHint.setTextSize(12);
+        root.addView(identityHint, matchWrap());
+        aoaManufacturerInput = addAoaInput("制造商（manufacturer）", "OpenCarlinkReceiver");
+        aoaModelInput = addAoaInput("型号（model）", "OpenCarlinkReceiver experimental AOA probe");
+        aoaDescriptionInput = addAoaInput("描述（description）", "Experimental AOA transport probe");
+        aoaVersionInput = addAoaInput("版本（version）", "0.1.8");
+        aoaUriInput = addAoaInput("说明网址（URI）", "https://github.com/LiuuiL98/OpenCarlinkReceiver");
+        aoaSerialInput = addAoaInput("序列号（serial）", "OCR-ANDROID-RECEIVER");
+        Button resetIdentity = new Button(this);
+        resetIdentity.setText("恢复默认 AOA 身份");
+        resetIdentity.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                aoaManufacturerInput.setText("OpenCarlinkReceiver");
+                aoaModelInput.setText("OpenCarlinkReceiver experimental AOA probe");
+                aoaDescriptionInput.setText("Experimental AOA transport probe");
+                aoaVersionInput.setText("0.1.8");
+                aoaUriInput.setText("https://github.com/LiuuiL98/OpenCarlinkReceiver");
+                aoaSerialInput.setText("OCR-ANDROID-RECEIVER");
+                setUsbStatus("已恢复默认实验身份。请注意：这不是官方 ICCOA 身份配置。");
+            }
+        });
+        root.addView(resetIdentity, matchWrap());
 
         Button aoaReadButton = new Button(this);
         aoaReadButton.setText("申请 AOA 设备权限并测试接收");
@@ -179,6 +214,25 @@ public class MainActivity extends Activity {
         note.setTextSize(14);
         note.setPadding(0, dp(10), 0, dp(10));
         root.addView(note, matchWrap());
+    }
+
+
+    private EditText addAoaInput(String labelText, String defaultValue) {
+        TextView label = new TextView(this);
+        label.setText(labelText);
+        label.setTextColor(0xFFB7C5D3);
+        label.setTextSize(12);
+        label.setPadding(0, dp(4), 0, 0);
+        root.addView(label, matchWrap());
+        EditText input = new EditText(this);
+        input.setSingleLine(true);
+        input.setText(defaultValue);
+        input.setTextColor(0xFFFFFFFF);
+        input.setHintTextColor(0xFF7F8C99);
+        input.setTextSize(13);
+        input.setPadding(dp(8), dp(4), dp(8), dp(4));
+        root.addView(input, matchWrap());
+        return input;
     }
 
     private void requestUsbPermissionAndTest() {
@@ -403,14 +457,21 @@ public class MainActivity extends Activity {
                 return;
             }
 
-            String[] identity = new String[] {
-                    "OpenCarlinkReceiver",
-                    "OpenCarlinkReceiver experimental AOA probe",
-                    "Experimental AOA transport probe",
-                    "0.1.6",
-                    "https://github.com/LiuuiL98/OpenCarlinkReceiver",
-                    "OCR-ANDROID-RECEIVER"
+            final String[] identity = new String[] {
+                    aoaManufacturerInput == null ? "OpenCarlinkReceiver" : aoaManufacturerInput.getText().toString().trim(),
+                    aoaModelInput == null ? "OpenCarlinkReceiver experimental AOA probe" : aoaModelInput.getText().toString().trim(),
+                    aoaDescriptionInput == null ? "Experimental AOA transport probe" : aoaDescriptionInput.getText().toString().trim(),
+                    aoaVersionInput == null ? "0.1.8" : aoaVersionInput.getText().toString().trim(),
+                    aoaUriInput == null ? "https://github.com/LiuuiL98/OpenCarlinkReceiver" : aoaUriInput.getText().toString().trim(),
+                    aoaSerialInput == null ? "OCR-ANDROID-RECEIVER" : aoaSerialInput.getText().toString().trim()
             };
+            for (int i = 0; i < identity.length; i++) {
+                byte[] encoded = identity[i].getBytes("UTF-8");
+                if (encoded.length > 255) {
+                    setUsbStatus("AOA 身份字段 " + i + " 超过 255 字节，已中止切换。请缩短内容后重试。");
+                    return;
+                }
+            }
             for (int i = 0; i < identity.length; i++) {
                 byte[] value = (identity[i] + "\0").getBytes("UTF-8");
                 int sent = connection.controlTransfer(
