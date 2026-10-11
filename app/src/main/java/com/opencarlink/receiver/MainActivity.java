@@ -110,7 +110,7 @@ public class MainActivity extends Activity {
 
         out.append("\n【无线网络】\n");
         WifiManager wifi = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
-        out.append("Wi-Fi 服务：").append(wifi == null ? "un支持" : "支持").append("\n");
+        out.append("Wi-Fi 服务：").append(wifi == null ? "不可用" : "支持").append("\n");
         out.append("Wi-Fi Direct 功能：")
            .append(getPackageManager().hasSystemFeature("android.hardware.wifi.direct") ? "系统已报告" : "系统未报告")
            .append("\n");
@@ -147,7 +147,7 @@ public class MainActivity extends Activity {
                     }
                 }
             }
-            if (found == 0) out.append("No H.264 decoder 系统已报告 by MediaCodecList\n");
+            if (found == 0) out.append("系统未报告可用的 H.264 解码器\n");
         } catch (Throwable error) {
             out.append("读取解码器信息失败：").append(error.getClass().getSimpleName()).append("\n");
         }
