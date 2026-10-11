@@ -2,7 +2,7 @@
 
 Branch: `feature/usb-aoa-diagnostic-flow`
 
-This note records static DEX evidence from the supplied ICCOA v1.5.3 APK. It is not a claim that runtime packet capture has independently validated every edge case.
+This note records static DEX evidence from the supplied ICCOA v1.5.3 APK. Runtime validation against a real phone/receiver trace is still required before treating the transport implementation as end-to-end compatible.
 
 ## Confirmed AOA outer record structure
 
@@ -17,7 +17,7 @@ In `AOAConnectManager$AOAReadThread.run()V` in `classes5.dex`:
 
 ## Byte order
 
-The `ByteConvert.bytesToInt(byte[], int)` method combines unsigned byte values with shifts of 24, 16, 8 and 0 bits in that order. Its matching `intToBytes` method writes the most significant byte at the lowest array offset. The AOA outer header is therefore big-endian according to the helper's implementation; this conclusion is based on DEX arithmetic, not merely on the diagnostic's two-endian display.
+The `ByteConvert.bytesToInt(byte[], int)` method combines unsigned byte values with shifts of 24, 16, 8 and 0 bits in that order. Its matching `intToBytes` method writes the most significant byte at the lowest array offset. The AOA outer header is therefore big-endian according to the helper's implementation; runtime captures should still verify the expected field values.
 
 ## BulkTransferIn exact-read behavior
 
@@ -32,34 +32,27 @@ The implementation of `AOAHostSetup.bulkTransferIn(byte[], int)`:
 
 This establishes exact-length behavior at the Java helper boundary. It does not mean one logical record is necessarily one physical USB packet; the helper may combine lower-level reads.
 
-## Local body-size cap added
+## Existing pure-Java safety helpers
 
-`AoaTransportHeaderProbe.decode(data, returnedLength, localBodyLimit)` now validates a caller-supplied local cap before a caller allocates a body buffer. The local cap must be between 1 byte and the official 64 MiB upper bound, and the declared body length must not exceed it. The original two-argument overload preserves the official bound for diagnostics but does not allocate memory.
+- `AoaTransportHeaderProbe` decodes the big-endian channel ID and declared body length, validating channel IDs 1..240 and the observed official length ceiling of 64 MiB. It supports a caller-supplied local size cap.
+- `AoaBodyReadPolicy` calculates the official requested body-read length (`max(declaredLength, 8)`), allocates only after local-cap validation, and rejects incomplete reads before dispatch.
+- `AoaCreateSocketRecord` decodes the create-socket body fields at offsets 0, 4, 8 and 9 after checking the 10-byte minimum.
+- `AoaRecordReader` reads one logical record through an injected exact-length source. It validates the header before allocating the body, rejects incomplete reads, and decodes create-socket bodies. It has no Android USB dependency and does not open sockets or send protocol messages.
 
-Tests cover normal big-endian decoding, create-socket identification, the official minimum body read length, invalid channel IDs, zero and over-limit lengths, an invalid local cap, a declared length above a chosen local cap, and incomplete/out-of-range input.
-
-This is a safety boundary, not a full stream reassembler. The UI's raw Bulk IN diagnostic has not been wired to this decoder because it does not yet establish a complete logical record boundary.
+Unit tests exercise normal channel records, create-socket decoding, the official 8-byte minimum read length, no-data before a header starts, incomplete header/body reads, invalid channel IDs, invalid/oversized lengths, and local-cap enforcement. These are deterministic unit tests; they do not substitute for a real USB capture.
 
 ## Important implementation boundary
 
-The official code accepts declared lengths up to 64 MiB. That is an observed upstream limit, not a safe default allocation size for this receiver. Callers should choose a smaller local cap based on expected message types and real traces; never allocate directly from an untrusted length without a local cap.
+The official code accepts declared lengths up to 64 MiB. That is an observed upstream limit, not a safe default allocation size for this receiver. The caller must choose a smaller local cap appropriate for expected message types and real traces; never allocate directly from an untrusted length without a local cap.
 
-The official behavior for declared lengths 1..7 requests 8 bytes but passes the declared length downstream. Preserve this as a documented quirk rather than assuming it is desirable behavior. Do not pass raw Bulk IN bytes directly to the UCar 20-byte message parser. No outbound auth/certificate data should be implemented on the strength of this framing analysis alone.
+The official behavior for declared lengths 1..7 requests 8 bytes but passes the declared length downstream. Preserve this as a documented quirk rather than assuming it is desirable behavior. Do not pass raw Bulk IN bytes directly to the UCar 20-byte message parser. No outbound auth/certificate data should be implemented on the strength of static framing analysis alone.
 
-## Next gate
+## Next gate: hardware validation and integration
 
-1. Inspect `handleCreateSocket(byte[], int)` instruction by instruction and confirm the record minimum and field offsets.
-2. Select and document a conservative local allocation cap for the actual receiver use case.
-3. Add a separate bounded body-read abstraction with tests for short reads, failed reads, oversized lengths, and channel lookup misses, keeping USB I/O and authentication outside the parser.
+1. Run the pure-Java unit tests and build the debug APK on CI.
+2. On the Galaxy S9+ receiver, capture the 8-byte header and exact requested/returned body lengths while the official ICCOA sender connects. Record decoded channel IDs/lengths and exception types, but redact authentication, certificate, and decrypted payload data.
+3. Compare those observed values with this DEX-derived model. In particular, validate the `channelId == 1` create-socket path and the expected 10-byte minimum.
+4. Only after a trace matches should `AoaRecordReader` be connected to the live USB path. Keep USB reconnection/retry behavior in the USB adapter, not in the pure parser.
+5. Then test full channel lifecycle and UCar message parsing on captured, non-sensitive fixtures.
 
-## New pure-Java body-read policy
-
-Added `AoaBodyReadPolicy` as a separate helper so framing decisions can be tested without USB hardware:
-
-- `requestedReadLength(header, localBodyLimit)` validates the local cap before returning the official requested length, `max(declaredBodyLength, 8)`.
-- `allocate(header, localBodyLimit)` performs allocation only after that validation. It does not choose a production cap for the application; the caller must make that decision explicitly.
-- `requireCompleteRead(requestedLength, returnedLength)` rejects zero, negative, and short return values before downstream dispatch. This models the official helper contract at its Java API boundary; the USB implementation itself remains responsible for retries and lower-level chunk accumulation.
-
-Unit tests cover normal body lengths, the official 8-byte minimum for declared lengths below 8, local-cap rejection before allocation, invalid caps, and exact versus incomplete read counts.
-
-This is not yet a stream reassembler and is not wired into the UI's raw Bulk IN diagnostic. A safe next step is to finish reviewing `handleCreateSocket` and then introduce an explicit record reader around a known transport boundary, rather than guessing at how arbitrary USB chunks should be joined.
+**Answer to the hardware-testing question:** no, real-device testing is not optional for declaring this protocol path complete. We can and should implement bounded parsing and automated tests offline first; the actual sender/receiver trace is required to validate assumptions, lifecycle ordering, and end-to-end interoperability.
