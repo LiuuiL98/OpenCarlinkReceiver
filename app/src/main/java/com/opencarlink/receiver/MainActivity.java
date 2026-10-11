@@ -413,12 +413,12 @@ public class MainActivity extends Activity {
             if (file.exists() && file.length() > 2 * 1024 * 1024) {
                 FileOutputStream reset = new FileOutputStream(file, false);
                 reset.write(("[" + new SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US).format(new Date())
-                        + "] TRACE_ROTATED previous log exceeded 2 MiB\\n").getBytes("UTF-8"));
+                        + "] TRACE_ROTATED previous log exceeded 2 MiB\n").getBytes("UTF-8"));
                 reset.close();
             }
             FileOutputStream out = new FileOutputStream(file, true);
             String timestamp = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US).format(new Date());
-            out.write((timestamp + " " + line + "\\n").getBytes("UTF-8"));
+            out.write((timestamp + " " + line + "\n").getBytes("UTF-8"));
             out.close();
         } catch (Exception ignored) {
             // Diagnostics must never crash the USB test if local trace storage fails.
@@ -452,11 +452,11 @@ public class MainActivity extends Activity {
 
     private void exportCommunicationTrace() {
         recordEvent("TRACE_EXPORT", "用户请求导出本机通信追踪日志（包含逐次 Bulk IN 原始 HEX）。");
-        String text = "OpenCarlinkReceiver ICCOA 通信追踪日志\\n"
-                + "应用版本：0.2.4\\n"
+        String text = "OpenCarlinkReceiver ICCOA 通信追踪日志\n"
+                + "应用版本：0.2.4\n"
                 + "设备：" + Build.MANUFACTURER + " " + Build.MODEL
-                + "；Android " + Build.VERSION.RELEASE + "（API " + Build.VERSION.SDK_INT + "）\\n"
-                + "说明：包含阶段事件、USB 接口/端点信息和逐次 Bulk IN 原始 HEX；不会主动记录六段 AOA 序列号原文或 usb_pin_code。原始 USB 数据仍可能含协议标识或其他设备信息，分享前请检查。\\n\\n"
+                + "；Android " + Build.VERSION.RELEASE + "（API " + Build.VERSION.SDK_INT + "）\n"
+                + "说明：包含阶段事件、USB 接口/端点信息和逐次 Bulk IN 原始 HEX；不会主动记录六段 AOA 序列号原文或 usb_pin_code。原始 USB 数据仍可能含协议标识或其他设备信息，分享前请检查。\n\n"
                 + readTraceLog();
         Intent share = new Intent(Intent.ACTION_SEND);
         share.setType("text/plain");
