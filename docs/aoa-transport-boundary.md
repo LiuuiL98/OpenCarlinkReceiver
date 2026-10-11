@@ -17,26 +17,28 @@ In `AOAConnectManager$AOAReadThread.run()V` in `classes5.dex`:
 
 ## Byte order confirmed from helper code
 
-The `ByteConvert.bytesToInt(byte[], int)` method reads four unsigned byte values and combines them with shifts of 24, 16, 8 and 0 bits in that order. Its matching `intToBytes` method writes the most significant byte at the lowest array offset. The AOA outer header is therefore big-endian according to the helper's implementation; this conclusion is based on DEX arithmetic, not merely on the diagnostic's two-endian display.
+The `ByteConvert.bytesToInt(byte[], int)` method combines four unsigned bytes with shifts of 24, 16, 8 and 0 bits. Its matching `intToBytes` method writes the most significant byte at the lowest array offset. The outer header is therefore big-endian according to the helper implementation.
 
 ## BulkTransferIn exact-read behavior
 
-The implementation of `AOAHostSetup.bulkTransferIn(byte[], int)` was also inspected:
+The implementation of `AOAHostSetup.bulkTransferIn(byte[], int)`:
 
-- It rejects use when the USB connection or IN endpoint is unavailable.
-- It repeatedly calls `bulkTransferInInternal(byte[], int, int)` in chunks of at most 16,384 bytes, tracking the offset and total bytes received.
-- Positive reads advance the offset and the loop continues until the requested byte count is satisfied.
-- If the accumulated byte count is zero, it can return zero.
-- If the accumulated byte count is nonzero but differs from the requested count, it raises an `IOException` reporting expected and received byte counts. It does not intentionally return a short positive read as if the requested read had completed.
-- The internal method calls `UsbNative.bulkRead(...)`; on a negative result it logs the failure and may wait for USB reconnection and retry once. A failed retry raises an `IOException`.
+- rejects use when the USB connection or IN endpoint is unavailable;
+- repeatedly calls `bulkTransferInInternal(byte[], int, int)` in chunks of at most 16,384 bytes, tracking offset and total received;
+- continues after positive reads until the requested byte count is satisfied;
+- can return zero if no bytes were accumulated;
+- raises an `IOException` if a nonzero accumulated count differs from the requested count, rather than returning a short positive read as complete;
+- calls `UsbNative.bulkRead(...)`; on a negative result it logs failure and may wait for USB reconnection and retry once. A failed retry raises an `IOException`.
 
-This establishes exact-length behavior at the Java helper boundary. It does not mean one logical record is necessarily one physical USB packet; the helper may combine lower-level reads.
+This establishes exact-length behavior at the Java helper boundary. It does not mean one logical record is necessarily one physical USB packet; the helper can combine lower-level reads.
 
-## Safe implementation progress
+## Safe parser components added
 
-`AoaTransportHeaderProbe` now has a pure-Java `decode` method that returns the channel ID and declared body length after validating the observed ranges. It also exposes the official minimum body-read request length (`max(declaredLength, 8)`) without allocating a body buffer or performing USB I/O.
+- `AoaTransportHeaderProbe.decode(...)` decodes and bounds-checks the channel ID and declared body length without allocating a body or performing USB I/O.
+- `AoaCreateSocketRecord.decode(...)` parses the create-socket body fields at offsets 0, 4, 8 and 9, and rejects a reported length below the official 10-byte minimum or a reported length beyond the available array.
+- Unit tests cover big-endian header decoding, create-socket channel identification, the official minimum body-read request length, invalid header ranges, and create-socket record boundaries/unsigned byte fields.
 
-Unit tests cover big-endian decoding, the create-socket channel discriminator, the minimum read length for short declared bodies, incomplete headers, invalid channel IDs, zero body length, and lengths above the official 64 MiB check. This helper is intentionally not wired into the raw USB Bulk IN diagnostic path because that path has not yet established record boundaries.
+These components are intentionally not wired into the raw USB Bulk IN diagnostic path: that path has not yet established reliable logical record boundaries.
 
 ## Important safety boundary
 
@@ -46,6 +48,6 @@ Do not pass raw Bulk IN bytes directly to the UCar 20-byte message parser. No ou
 
 ## Next gate
 
-1. Inspect `handleCreateSocket(byte[], int)` instruction by instruction and confirm the record minimum and field offsets.
-2. Decide and document a conservative local allocation cap based on the actual receiver's intended message types.
-3. Add a separate bounded body-read/reassembly abstraction with tests for short reads, failed reads, oversized lengths, and channel lookup misses, keeping USB I/O and authentication outside the parser.
+1. Inspect the parent method's record dispatch and verify that create-socket records are never truncated by a local wrapper.
+2. Add a pure-Java, bounded body-length policy that separates the official 64 MiB upper bound from a deliberately smaller receiver allocation cap.
+3. Add tests for body lengths above the local cap, truncated body input, zero-byte reads, failed reads, and channel lookup misses. Keep USB I/O and authentication outside the parser.
