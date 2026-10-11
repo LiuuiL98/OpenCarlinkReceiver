@@ -655,3 +655,18 @@ The DEX body of both overloads of `Crc16.checksum` was inspected:
 This establishes that the helper processes a bounded range and that the ByteBuffer overload's indexes are relative to the buffer's current remaining range as checked by the implementation. It does **not** yet establish the CRC-16 variant: the polynomial, initial value, reflection settings, final XOR, and table contents have not been reconstructed in this pass. Do not substitute a generic CRC-16 implementation until those values are recovered or verified against known official frames.
 
 The enum initializer also visibly contains the numeric constants `4321`, `7236`, and `15550` alongside the `UIBC`, `RTSP`, and `RTP` construction sequences, respectively. Treat these as strong sequence-level evidence, but finish decoding the register/field assignments before treating them as a tested port map. The other channel ports remain unresolved.
+
+
+## 23. CRC class API shape and what can safely be concluded
+
+A further method inventory of `com.ucar.protocol.Crc16` reveals a notable compatibility detail:
+
+- `checksum(ByteBuffer, int, int)` and `checksum(byte[], int, int)` are the direct range-checking calculation entry points.
+- `update(byte[])` delegates to the byte-array checksum overload.
+- `update(byte[], int, int)` also delegates to the byte-array checksum overload.
+- `update(int)` throws `UnsupportedOperationException` rather than processing a single byte.
+- The class also exposes `getValue()` and `reset()`.
+
+This API shape means it should not be treated as a fully conventional, incrementally updateable `java.util.zip.Checksum` implementation without checking the exact return/state semantics. In particular, a receiver implementation should call the official-compatible range checksum operation over the exact header bytes, not assume that repeated `update(int)` calls are valid.
+
+The current DEX invoke scan confirms the delegation and exception path but does not yet establish the CRC table contents or polynomial. The CRC algorithm remains unimplemented in OpenCarlinkReceiver until those details are verified against the method's arithmetic and at least one captured official frame.
