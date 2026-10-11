@@ -902,3 +902,16 @@ This is an explicit quality gate, not a protocol conclusion: the previous eviden
 5. Validate the resulting implementation against a captured, non-sensitive official protocol frame or a reproducible test vector before using it in the receiver.
 
 Until steps 1–4 are complete, keep CRC implementation out of the compatibility path rather than shipping a plausible but unverified checksum.
+
+
+## 34. CRC table fully recovered and verified
+
+The `Crc16.<clinit>` `fill-array-data` payload was decoded directly from `classes7.dex`. It declares element width 4 and exactly 256 entries. The complete array was compared programmatically with a generated 256-entry reflected CRC table using polynomial `0xA001`; all 256 entries match exactly (including the initial values `0x0000, 0xC0C1, 0xC181, 0x0140` and final value `0x4040`).
+
+This upgrades the polynomial/table finding from a fingerprint-based inference to an exact table match. It still does not identify the complete CRC variant: the accumulator initialization, per-byte update expression, final XOR, and precise header byte range must be recovered from the checksum method and MessageHeader call sites.
+
+### Reproducibility note
+
+The verification used the `fill-array-data` payload referenced by the static initializer, parsed as 256 little-endian 32-bit entries, and compared each entry to eight iterations of:
+`c = (c >> 1) ^ ((c & 1) ? 0xA001 : 0)`.
+The comparison returned `True` for all 256 entries. This is a table validation, not yet an end-to-end frame checksum test.
