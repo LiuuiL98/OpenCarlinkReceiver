@@ -1040,3 +1040,34 @@ Source: Android Open Source Project, “Dalvik executable instruction formats”
 - End-to-end confirmation against a valid official frame.
 
 No new CRC implementation is being described as complete in this commit. The next implementation change should only be made after the method's instruction stream has been decoded with verified widths and branch targets, and the result has been checked against the ByteBuffer overload or a known-valid frame.
+
+
+## 41. CRC16 arithmetic recovered from DEX: CRC-16/ARC (IBM), init 0x0000
+
+The checksum loop in both `Crc16.checksum(ByteBuffer, int, int)` and `Crc16.checksum(byte[], int, int)` has now been decoded at instruction boundaries. Both methods implement the same table-driven recurrence.
+
+### Decoded recurrence
+
+Let `crc` start at `0x0000`. For each byte `b` in the requested range:
+
+```text
+index = (crc XOR b) AND 0xFF
+crc   = (crc >>> 8) XOR CRC16_TABLE[index]
+```
+
+The byte-array overload initializes its accumulator with `const/4 0`, extracts the upper byte using unsigned shift right by 8, XORs the accumulator with the input byte, masks the table index with `0x00FF`, loads `CRC16_TABLE[index]`, and XORs that entry with the shifted accumulator. The ByteBuffer overload follows the same arithmetic and reads bytes by absolute index.
+
+Combined with the exact 256-entry reflected `0xA001` table, initial value `0x0000`, and no final XOR in the decoded return path, this matches **CRC-16/ARC** (also commonly called CRC-16/IBM; not CRC-16/MODBUS, which uses init `0xFFFF`).
+
+### Known check value
+
+The standard ASCII test input `123456789` should produce `0xBB3D` under this parameterization. This is a reproducible implementation test; an official ICCOA frame is still needed for end-to-end transport validation.
+
+### Full header checksum contract
+
+- Header minimum length: 20 bytes.
+- Compute CRC over `rawBytes[0..17]` (offset 0, length 18).
+- Store/read the result as a big-endian 16-bit value at offsets 18–19.
+- Parameters: reflected polynomial `0xA001`, init `0x0000`, xorout `0x0000`, reflected input/output as implied by the table-driven right-shift algorithm.
+
+This is the first section that records the complete arithmetic rather than a table-based inference. Before integration, implement a unit test for the `123456789 → 0xBB3D` check value and compare the two overloads over the same byte ranges.
