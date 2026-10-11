@@ -1071,3 +1071,19 @@ The standard ASCII test input `123456789` should produce `0xBB3D` under this par
 - Parameters: reflected polynomial `0xA001`, init `0x0000`, xorout `0x0000`, reflected input/output as implied by the table-driven right-shift algorithm.
 
 This is the first section that records the complete arithmetic rather than a table-based inference. Before integration, implement a unit test for the `123456789 → 0xBB3D` check value and compare the two overloads over the same byte ranges.
+
+
+## 42. CRC implementation added to the receiver repository
+
+The reverse-engineered checksum is now represented by small Java utilities in the project source tree:
+
+- `app/src/main/java/com/opencarlink/receiver/protocol/Crc16Arc.java`: standalone CRC-16/ARC calculation.
+- `app/src/main/java/com/opencarlink/receiver/protocol/UCarHeaderChecksum.java`: minimum 20-byte header check, CRC over bytes 0–17, big-endian stored value at bytes 18–19, and comparison helper.
+- `app/src/test/java/com/opencarlink/receiver/protocol/Crc16ArcTest.java`: check value `123456789 → 0xBB3D`, empty input, range selection, null and invalid-range behavior.
+- `app/src/test/java/com/opencarlink/receiver/protocol/UCarHeaderChecksumTest.java`: valid synthetic header, covered-byte mutation, proof that stored CRC bytes are excluded from calculation, short header and null behavior.
+
+The header test builds a synthetic header and computes/stores its checksum using the same implementation. This validates the helper's range and byte-order contract, but is not an independent official-frame golden vector. The standard ARC check value is an independent known check.
+
+### Validation status
+
+These files have been committed, but a GitHub Actions run has not been inspected in this step. Do not consider the test suite or APK build confirmed until CI reports success. The helper is not yet wired into the live USB receive path or a complete UCar message parser.
