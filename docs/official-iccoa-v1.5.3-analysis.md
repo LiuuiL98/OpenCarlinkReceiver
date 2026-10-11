@@ -457,3 +457,43 @@ The missing evidence is the instruction body and callers for `ConnectChannel`, n
 - the channel/socket object passed to `ConnectChannel`.
 
 Until these instruction bodies are recovered, any claim that `ConnectChannel` uses a particular socket, frames reads in a particular way, or validates CRC at a specific point would exceed the evidence. Keep the app implementation unchanged until this call graph is established.
+
+
+## 18. DEX-level call-site recovery: ConnectChannel inherits the socket protocol engine
+
+This pass used a small local DEX table/code-item scanner against the supplied APK's extracted DEX files. It is **not** a full Java decompilation: the method IDs and direct invoke references below were recovered from DEX metadata/instructions, while branch conditions and all register values still need a proper disassembly/decompiler review.
+
+### 18.1 ConnectChannel is a thin specialization
+
+In `classes5.dex`, `com.share.connect.channel.ConnectChannel` declares three constructors and `onServerBound()`. The constructors delegate to `com.ucar.protocol.channel.socket.SocketChannel`; the one-argument constructor calls `SocketChannel.<init>(ChannelType)`, and the three-argument constructor calls `SocketChannel.<init>(ChannelType, boolean, boolean)`.
+
+Its `onServerBound()` invokes `ConnectManager.getInstance()`, `getServerPort()`, and `ConnectManager.registerServerSocket(int, boolean)`. This is direct evidence that ConnectChannel relies on the shared socket-channel implementation and a manager-controlled server-socket registration path. The `send(UCarMessage, callback)` method previously identified at the call site is inherited/shared behavior rather than a declared method in ConnectChannel's own class body.
+
+### 18.2 Shared SocketChannel owns stream framing and message operations
+
+In `classes7.dex`, `com.ucar.protocol.channel.socket.SocketChannel` is defined. Its recovered method table includes constructors, `startClientChannel`, `startServerChannel`, `startReadData`, `startReadWriteThread`, `sendWithAck`, `closeInternal`, and multiple `lambda$...` callbacks. The send-related synthetic callback invokes `SocketChannel.lambda$send$8$SocketChannel(UCarMessage, SendFutureCallback)`; the request timeout callback invokes `lambda$request$7$SocketChannel(UCarMessage, RequestFuture, long)`. This places the send/request implementation in SocketChannel, not in the USB Bulk IN loop.
+
+The constructor chain includes `NetChannel.<init>(ChannelType, boolean)` and constructs a `com.ucar.protocol.security.SecurityManager`. The socket-channel class also references Java socket and executor/thread APIs, and has explicit client/server channel startup methods. This is consistent with a layered socket transport implementation. The exact byte-level read loop and whether it accumulates the full 20-byte header before allocating/reading the body still require the relevant method bodies to be disassembled and checked; the method names alone do not prove those details.
+
+### 18.3 AOA channel creation and UCar socket channel are separate paths
+
+In `classes5.dex`, `AOAReadThread.run()` calls `AOAHostSetup.bulkTransferIn(byte[], int)`, decodes two integers through `ByteConvert.bytesToInt(byte[], int)`, reads a body, and dispatches through `AOAConnectManager.handleCreateSocket(byte[], int)` or `getReadThreadByChannelId(int)`; the latter path forwards bytes to `SocketReadThread.writeData(byte[], int, int)`.
+
+`AOAConnectManager.handleCreateSocket(byte[], int)` references two 32-bit conversions, two unsigned-byte conversions, then branches into `startServerSocketThread(int, String, int)` or `startClientSocketThread(int, String, int, int)`. Those methods instantiate `LocalServerSocketReadThread` or `LocalClientSocketReadThread`, start the thread, wait for it to run, and store it by channel/port key. This gives a concrete bridge model: AOA messages create or route per-channel local socket threads, while UCar protocol messages are handled by the separate SocketChannel/NetChannel engine.
+
+### 18.4 What this establishes—and what remains open
+
+Established from DEX references:
+- `ConnectChannel` is a subclass/specialization of `SocketChannel`, not the USB endpoint reader.
+- `SocketChannel` owns shared send/request, client/server channel startup, and read-thread methods.
+- AOA's `handleCreateSocket` selects local server/client socket thread paths and maps data to a channel-specific thread.
+- The current receiver must not place UCar header parsing directly into its raw USB Bulk IN loop.
+
+Still not established from this pass:
+- the exact `SocketChannelReadTask` byte accumulation and `MessageHeader` parse/CRC order;
+- the precise `NetChannel` read/write stream behavior and socket endpoints used by the factory;
+- how the channel factory selects the `ChannelType`, port, and server/client role for the auth channel;
+- the exact callback registration that delivers parsed messages to `UCarAuthService`;
+- whether authentication/certificate startup ordering is fixed or lifecycle-dependent.
+
+The next pass should disassemble `SocketChannelReadTask.run()`, `NetChannel`, `SocketChannel.lambda$send$8$SocketChannel`, `SocketChannel.lambda$request$7$SocketChannel`, and the channel factory/owner. No authentication implementation should be written until those points are confirmed.
