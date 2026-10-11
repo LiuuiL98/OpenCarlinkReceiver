@@ -4,11 +4,15 @@ package com.opencarlink.receiver.protocol;
  * Parser for the create-socket payload delivered on AOA channel 1.
  *
  * Static analysis of the official ICCOA receiver shows a 10-byte minimum and
- * fields at offsets 0, 4, 8 and 9. This parser is pure Java and does not open
- * sockets or infer the meaning of the two trailing type bytes.
+ * fields at offsets 0, 4, 8 and 9. Socket type 1 selects the server-socket
+ * path and type 2 selects the client-socket path. This parser is pure Java
+ * and never opens sockets.
  */
 public final class AoaCreateSocketMessage {
     public static final int MIN_LENGTH = 10;
+    public static final int SOCKET_TYPE_SERVER = 1;
+    public static final int SOCKET_TYPE_CLIENT = 2;
+    public static final int SERVER_CHANNEL_ID_SENTINEL = -1;
 
     public final int port;
     public final int channelId;
@@ -21,6 +25,14 @@ public final class AoaCreateSocketMessage {
         this.channelId = channelId;
         this.socketType = socketType;
         this.channelMessageType = channelMessageType;
+    }
+
+    public boolean isServerSocketRequest() {
+        return socketType == SOCKET_TYPE_SERVER;
+    }
+
+    public boolean isClientSocketRequest() {
+        return socketType == SOCKET_TYPE_CLIENT;
     }
 
     /**
