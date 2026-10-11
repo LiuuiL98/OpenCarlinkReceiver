@@ -1,24 +1,49 @@
 # ICCOA v1.5.3 static-analysis notes
 
-Source artifact examined locally: `ICCOA - v1.5.3_202312071948_d8ad20b.apk` (version label 1.5.3). These notes separate directly observed APK symbols from conclusions that still require method-body decompilation or runtime evidence.
+Source artifact: `ICCOA - v1.5.3_202312071948_d8ad20b.apk`. This is a working evidence log. It distinguishes DEX metadata verified from the supplied APK from wire-level conclusions that require reliable instruction decompilation and runtime validation.
 
-## 1. Observed implementation symbols
+## 1. Confirmed class and method inventory
 
-DEX string/class metadata contains the following implementation names:
+DEX metadata places these classes in the supplied APK:
 
-- AOA setup and transport: `com.ucar.connect.aoa.AOAHostSetup`, `AOAPreambleBuilder`, `AOAReadThread`, `AOAConnectManager`.
-- Framing: `com.ucar.protocol.MessageHeader`, `ProtocolParser`, `Crc16`.
-- Authentication: `com.ucar.protocol.UCarAuthProtocol`, protobuf types `UCarProto.AuthRequest`, `AuthResponse`, `AuthConfirm`, and `CarCertificate`.
-- Channel identifiers include auth, certificate, command, audio, UIBC, sensor, cast RTSP/RTP and socket creation.
-- Symbols include `createAuthRequestMessage`, `createAuthResponseMessage`, `createAuthConfirmMessage`, `createCarCertificateMessage`, `parseAuthRequestMessage`, `parseAuthResponseMessage`, `parseAuthConfirmMessage`, `getAuthPk`, `getAuthPkHmac`, `authPk`, and `authPkMac`.
+- AOA transport: `com.ucar.connect.aoa.AOAHostSetup`, `AOAPreambleBuilder`, `AOAConnectManager`, and nested `AOAReadThread` / `AOAConnectThread`.
+- Message framing: `com.ucar.protocol.MessageHeader`, `ProtocolParser`, `Crc16`.
+- Authentication: `com.ucar.protocol.UCarAuthProtocol`, `UCarProto.AuthRequest`, `AuthResponse`, `AuthConfirm`, and `CarCertificate`.
 
-These names establish that the APK contains a framed UCar protocol and authentication/certificate messages. Names alone do not establish the exact wire format, state transitions, cryptographic inputs, or values.
+The DEX method table confirms these signatures exist:
+
+- `AOAPreambleBuilder.build(String, String, String, String, String, String): String`
+- `AOAPreambleBuilder.encodeCarName(String): String`
+- `AOAPreambleBuilder.encodeGenericString(String, int): String`
+- `AOAPreambleBuilder.encodeVersion(String): String`
+- `AOAHostSetup.changeToAccessoryMode(): boolean`
+- `AOAHostSetup.getProtocolVersion(): boolean`
+- `AOAHostSetup.sendIdentityStrings(): boolean`
+- `AOAHostSetup.startAccessoryMode(): boolean`
+- `AOAHostSetup.bulkTransferIn(byte[], int): int`
+- `MessageHeader.createMessageHeaderFromBytes(byte[]): MessageHeader`
+- `MessageHeader.writeBytesTo(ByteBuffer): void`
+- `MessageHeader.writeBytesTo(byte[]): void`
+- `MessageHeader.updateLength(int): void`
+- `MessageHeader.updateBodyLength(int): void`
+- `MessageHeader.updateChecksum(): void`
+- `MessageHeader.toTmpBytes(): byte[]`
+- `Crc16.checksum(ByteBuffer, int, int): short`
+- `Crc16.checksum(byte[], int, int): short`
+- `UCarAuthProtocol.createAuthRequestMessage(AuthRequest): UCarMessage`
+- `UCarAuthProtocol.createAuthResponseMessage(AuthResponse, int): UCarMessage`
+- `UCarAuthProtocol.createAuthConfirmMessage(AuthConfirm): UCarMessage`
+- `UCarAuthProtocol.parseAuthRequestMessage(UCarMessage): AuthRequest`
+- `UCarAuthProtocol.parseAuthResponseMessage(UCarMessage): AuthResponse`
+- `UCarAuthProtocol.parseAuthConfirmMessage(UCarMessage): AuthConfirm`
+
+This is a verified method inventory, not a full decompilation. It confirms where framing, CRC, AOA setup and authentication logic live; it does not establish their exact implementation.
 
 ## 2. Current receiver prototype versus official implementation
 
 The prototype currently implements standard AOA control requests 51/52/53, waits for USB re-enumeration, opens the first standard AOA interface, and performs a read-only Bulk IN test. It does not yet implement the UCar frame parser, CRC verification, channel demultiplexing, authentication, certificate handling, or request/response state machine.
 
-The six-part serial preamble currently accepts user-entered values and uses obvious project placeholders. A successful USB control transfer only proves the transfer was accepted; it does not prove the phone recognizes the accessory identity or that the values are valid OEM provisioning data.
+The six-part serial preamble currently accepts user-entered values and uses project placeholders. A successful USB control transfer proves only that the transfer completed; it does not prove the phone recognizes the accessory identity or that values are valid OEM provisioning data.
 
 ## 3. Interpretation of the 2026-10-12 trace
 
@@ -33,21 +58,21 @@ After AOA request 53, the phone re-enumerated as `18D1:2D01`. The trace then rea
 
 The read completed with 4 successful reads (36 bytes), 10 timeouts and no other USB errors. This proves bytes were available on Bulk IN; it does not by itself prove they are valid ICCOA/UCar messages or that authentication failed. No phone-side Samsung Carlink confirmation appeared.
 
-Do not label these bytes as a specific command/error without verifying the official `MessageHeader` and `ProtocolParser` method bodies and matching framing rules.
+Do not label these bytes as a specific command/error without verifying `MessageHeader.createMessageHeaderFromBytes`, `MessageHeader.writeBytesTo`, `ProtocolParser` and `Crc16` method bodies against the captured data.
 
 ## 4. AOA interface selection
 
-For Android AOA PID `0x2D01`, the standard interface is interface 0 and the second interface is ADB. The receiver's current choice of interface 0 / Bulk IN `0x81` is consistent with the AOA layout. The current trace also found the corresponding Bulk OUT endpoint `0x01`, but the prototype intentionally does not write business data.
+For Android AOA PID `0x2D01`, the standard accessory interface is interface 0 and the second interface is ADB. The receiver's current choice of interface 0 / Bulk IN `0x81` is consistent with that layout. The trace also found Bulk OUT endpoint `0x01`, but the prototype intentionally does not write business data.
 
-## 5. Safe implementation order
+## 5. Next implementation steps
 
-1. Decompile and inspect the method bodies for `AOAPreambleBuilder`, `MessageHeader`, `ProtocolParser`, `Crc16`, and `UCarAuthProtocol`.
-2. Record the verified header fields, byte order, message length semantics, CRC coverage, channel/message IDs and parser error paths in a separate protocol document.
-3. Add a read-only frame inspector that reports parsed fields only after the parser has been verified against official code and sample frames.
-4. Implement transport framing and CRC validation before channel dispatch.
-5. Implement the documented authentication state machine only with the actual official protocol requirements. Do not hard-code fabricated OEM IDs, pairing codes, private keys, certificates, or guessed Bulk OUT commands.
-6. Test with raw traces and explicit stage outcomes. Keep raw HEX opt-in because it can expose identifiers or authentication material.
+1. Use a reliable DEX decompiler/disassembler to inspect the method bodies listed above, beginning with `MessageHeader.createMessageHeaderFromBytes`, both `Crc16.checksum` overloads, and `AOAPreambleBuilder.build`.
+2. Record verified header field offsets, endianness, message length semantics, checksum coverage and channel/message IDs.
+3. Test a read-only parser against the four captured packets. If the reads are chunks of a stream rather than complete frames, add a stream reassembler before parsing.
+4. Only after framing is validated, trace the authentication state machine and certificate handling.
+5. Implement documented protocol stages with explicit outcomes. Do not hard-code fabricated OEM IDs, pairing codes, private keys, certificates or guessed Bulk OUT commands.
+6. Keep raw HEX capture opt-in because future frames may contain identifiers or authentication material.
 
-## 6. Evidence limitations
+## 6. Evidence boundary
 
-This pass extracted DEX class/method/string metadata from the supplied APK, but did not yet produce a reliable decompiled method-body listing. Therefore the exact frame layout, CRC algorithm parameters, protobuf field mapping, certificate verification and authentication exchange remain unverified. This document intentionally records that boundary instead of presenting inferred details as facts.
+The supplied APK's DEX tables have been parsed locally far enough to verify class names, method names, descriptors and code-item locations. A reliable instruction-level decompilation has not yet been completed in this environment. Therefore exact header layout, CRC parameters, protobuf field mapping, certificate verification and authentication exchange remain unverified. The method inventory above is concrete progress, but it must not be presented as a recovered protocol specification.
