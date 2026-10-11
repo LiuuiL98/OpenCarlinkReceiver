@@ -17,11 +17,11 @@ In `AOAConnectManager$AOAReadThread.run()V` in `classes5.dex`:
 
 ## Byte order confirmed from helper code
 
-The `ByteConvert.bytesToInt(byte[], int)` method reads four unsigned byte values and combines them with shifts of 24, 16, 8 and 0 bits in that order. Its matching `intToBytes` method writes the most significant byte at the lowest array offset. The AOA outer header is therefore big-endian according to the helper's implementation; this conclusion is based on DEX arithmetic, not merely on the diagnostic's two-endian display.
+The `ByteConvert.bytesToInt(byte[], int)` method combines unsigned bytes using shifts of 24, 16, 8 and 0 bits. Its matching `intToBytes` method writes the most significant byte at the lowest array offset. The AOA outer header is therefore big-endian according to the helper's implementation; this conclusion is based on DEX arithmetic, not merely on the diagnostic's two-endian display.
 
-## Exact-length USB helper behavior
+## BulkTransferIn exact-read behavior
 
-The implementation of `AOAHostSetup.bulkTransferIn(byte[], int)` was inspected:
+The implementation of `AOAHostSetup.bulkTransferIn(byte[], int)` was also inspected:
 
 - It rejects use when the USB connection or IN endpoint is unavailable.
 - It repeatedly calls `bulkTransferInInternal(byte[], int, int)` in chunks of at most 16,384 bytes, tracking the offset and total bytes received.
@@ -32,34 +32,24 @@ The implementation of `AOAHostSetup.bulkTransferIn(byte[], int)` was inspected:
 
 This establishes exact-length behavior at the Java helper boundary. It does not mean one logical record is necessarily one physical USB packet; the helper may combine lower-level reads.
 
-## New pure-Java test seam
+## New pure-Java implementation
 
-`AoaExactRead` models the wrapper's accumulation contract behind a fakeable `ChunkReader` interface. It is intentionally not connected to Android USB APIs and does not implement the native layer's reconnection/retry policy. Its unit tests cover:
+`AoaTransportHeaderProbe.decode(...)` decodes the two big-endian words and enforces the observed channel and official length ranges without allocating the body.
 
-- multiple partial reads that collectively satisfy the requested length;
-- zero bytes before any progress;
-- zero bytes after partial progress (short-read exception);
-- a negative/failed read;
-- impossible return counts larger than the requested chunk;
-- invalid arguments and a zero-length request.
+`AoaTransportRecordDecoder` is a separate, incremental utility. It can accept split headers/bodies and multiple records in one input range. It enforces a configurable local body-length cap before allocating the body buffer; the default is 1 MiB rather than the official code's 64 MiB maximum. It models the observed wire read length `max(declaredLength, 8)`, while exposing only the declared logical body bytes to callers. It supports reset after disconnect/error.
 
-This gives the exact-length behavior a deterministic unit-test surface without claiming to test the native USB stack. The caller must still handle `IOException`, reconnection, cancellation, and timeouts at the Android transport layer.
+This decoder is **not connected to the raw USB Bulk IN path**. The diagnostic currently reads a header-sized transfer and subsequent body reads through the Android USB API; integrating a stream decoder there without changing that I/O model could double-frame or desynchronize the stream. First validate the USB helper contract and real captures.
 
-## Pure-Java parser and allocation policy
+Unit tests cover split headers and bodies, multiple records in one input range, create-socket discriminator handling, the short-body 8-byte wire-read behavior, invalid ranges, over-cap lengths, and reset after partial input.
 
-- `AoaTransportHeaderProbe.decode(...)` validates the two big-endian header words and returns channel ID plus declared body length without allocating a body.
-- `AoaBodyLengthPolicy` applies a **1 MiB local allocation cap** by default, separately from the official 64 MiB limit.
-- `AoaCreateSocketRecord.decode(...)` decodes the create-socket record fields at offsets 0, 4, 8 and 9, with a 10-byte minimum.
-- These components are not wired into the raw USB Bulk IN diagnostic path. The path has not yet established reliable logical record boundaries and must not feed raw USB chunks directly to the UCar 20-byte parser.
+## Important safety boundary
 
-## Implementation guardrails
+The official code accepts declared lengths up to 64 MiB. The receiver uses a conservative 1 MiB local cap by default until realistic legitimate message sizes have been captured and measured. Never allocate directly from an untrusted length without a local cap. The official behavior for declared lengths 1..7 requests 8 bytes but passes the declared length downstream; this is a documented quirk, not a claim that the extra bytes are padding in every runtime scenario.
 
-The official code accepts declared lengths up to 64 MiB, but the receiver's default local cap is intentionally much smaller until realistic valid traffic is measured. Do not allocate directly from an untrusted length without a local cap. The official behavior for declared lengths 1..7 requests 8 bytes but passes the declared length downstream; this is documented as an observed quirk, not necessarily desirable behavior.
-
-No outbound auth/certificate data should be implemented on the strength of framing analysis alone.
+Do not pass raw Bulk IN bytes directly to the UCar 20-byte message parser. No outbound auth/certificate data should be implemented on the strength of this framing analysis alone.
 
 ## Next gate
 
-1. Review parent-method dispatch and verify that create-socket records cannot be truncated by a wrapper.
-2. Confirm the new unit tests pass in CI.
-3. Only integrate a reassembler after boundary behavior and runtime traces agree. Keep USB I/O and authentication outside the pure parser.
+1. Inspect `handleCreateSocket(byte[], int)` instruction by instruction and confirm the record minimum and field offsets.
+2. Validate the local cap against realistic read-only captures; increase it only with evidence.
+3. Review decoder tests and CI before considering any transport integration.
