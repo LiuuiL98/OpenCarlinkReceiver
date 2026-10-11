@@ -632,9 +632,9 @@ public class MainActivity extends Activity {
                     }
                 }
                 final String finalResult = result;
-                recordEvent("AOA_BULK_IN", summarizeBulkReadResult(finalResult));
                 runOnUiThread(new Runnable() {
                     @Override public void run() {
+                        recordEvent("AOA_BULK_IN", summarizeBulkReadResult(finalResult));
                         setUsbStatus(finalResult);
                         refreshDiagnostics();
                     }
