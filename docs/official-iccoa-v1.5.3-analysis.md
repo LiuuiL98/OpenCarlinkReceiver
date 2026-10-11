@@ -788,3 +788,21 @@ This means a decoded message is first offered to the pending request/response ma
 ### Still unresolved
 
 This call sequence alone does not reveal the full sequence-ID matching rules inside `FutureRequestManager.complete`, nor whether all message types are eligible for completion. The manager's implementation and `SocketChannel.onMessage` branches must be inspected next. The CRC algorithm's initial value/update expression and runtime channel-port mapping also remain unverified.
+
+
+## 29. Request completion and channel dispatch: boundary of current evidence
+
+The current recovered call graph establishes the order `FutureRequestManager.complete(message)` → `SocketChannel.onMessage(message)` → `UCarMessage.release()`. The available instruction-reference scan does not yet expose enough branch-level detail to state the matching predicate inside `FutureRequestManager.complete` or the exact message-type switch inside `SocketChannel.onMessage`. No claim is made here about whether matching is based solely on sequence ID, whether response type is also required, or which messages are excluded.
+
+### Receiver design decision that is supported now
+
+The receiver should expose two distinct internal stages:
+
+- **Request correlation stage:** may match a response to a pending request and resolve a callback/future. This stage must be able to report “no pending request matched” without automatically dropping the message.
+- **Channel handler stage:** receives the decoded message independently and dispatches by the parsed command/category/method fields to the relevant channel handler.
+
+For a first diagnostic implementation, it is safer to log these as separate events and keep the message available until both stages have completed. Only add automatic filtering once the exact matching and dispatch branches are decoded. This avoids silently losing unsolicited messages while preserving the official ordering found in the DEX.
+
+### Next static-analysis target
+
+Inspect `FutureRequestManager` fields and methods (`add`, `complete`, timeout/cancel/remove paths) and then disassemble the conditional branches in `SocketChannel.onMessage`. Record the actual key used for correlation and the response-type conditions only when supported by the instruction operands. In parallel, finish `Crc16` arithmetic and compare it with a valid captured header before implementing a checksum function.
