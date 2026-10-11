@@ -247,3 +247,60 @@ This confirms that the UCar wrapper is a header-plus-protobuf-body format. It do
 ### Updated implementation consequence
 
 Do not treat every AOA body as a UCar message. First reproduce the AOA transport's header/body read sequence and socket-creation/data-forwarding behavior. Separately trace which socket channel, if any, carries UCar messages and where that stream is decoded. Keep these two framing layers separate in both code and logs.
+
+
+## 13. Extracted protocol schema from the official APK
+
+The APK itself packages `ucar.proto` (alongside generated protobuf classes in `classes7.dex`). This is direct source evidence and gives us field names and wire types without inferring them from obfuscated call sites. It is the schema used by the packaged generated classes, although the schema alone does not prove which messages are exchanged first at runtime.
+
+### 13.1 Authentication schema
+
+`AuthRequest` fields:
+| Field number | Name | Type / documented meaning |
+|---:|---|---|
+| 1 | `version` | int32; phone protocol version |
+| 2 | `authPk` | bytes; phone authentication public key R, x || y |
+| 3 | `authPkHmac` | bytes; MAC for `authPk` |
+| 4 | `agreementPk` | bytes; phone agreement public key R' |
+| 5 | `agreementPkSig` | bytes; ECDSA signature for R' |
+| 6 | `random` | bytes; phone nonce Na |
+| 7 | `id` | bytes; phone unique ID, documented as 6 bytes |
+| 8 | `model` | string; phone model, documented as UTF-8 and 32 bytes |
+| 9 | `userConfirmed` | bool; user confirmation state |
+| 10 | `workModes` | optional int32; phone-supported work modes |
+| 11 | `productName` | optional string; product name |
+
+`AuthResponse` fields:
+| Field number | Name | Type / documented meaning |
+|---:|---|---|
+| 1 | `version` | int32; car protocol version |
+| 2 | `authPk` | bytes; car authentication public key S |
+| 3 | `authPkHmac` | bytes; MAC for `authPk` |
+| 4 | `agreementPk` | bytes; car agreement public key S' |
+| 5 | `agreementPkSig` | bytes; ECDSA signature for S' |
+| 6 | `random` | bytes; car nonce Nb |
+| 7 | `result` | int32; negotiation result |
+| 8 | `workModes` | optional int32; selected work modes |
+| 9 | `dayOrNightMode` | optional int32; current display mode |
+| 10 | `screenInfo` | optional string; documented as screen width/height/DPI |
+
+`AuthConfirm.cipher` (field 1, bytes) is documented as ciphertext containing the phone's local IP address encrypted with the session key. These comments indicate a public-key/key-agreement authentication design. They do not disclose private keys or the complete cryptographic verification algorithm.
+
+### 13.2 Message indexes and certificate envelope
+
+The schema defines:
+- `AuthIndex`: `auth_request=1`, `auth_response=2`, `auth_confirm=3`.
+- `CertIndex`: `certificate=1`.
+- `CarCertificate.content=1` (bytes).
+
+The APK also contains `UCarCertProtocol.createCarCertificateMessage` and generated `CarCertificate` classes. This proves the existence of a certificate message builder and its protobuf envelope, but does not by itself prove the certificate's DER/ASN.1 format, trust anchor, or when it is sent.
+
+### 13.3 Control message family
+
+The schema's `ControlIndex` is a protobuf envelope with numbered fields 1–35, including heartbeat, port discovery, microphone state, mirror state, audio player state, phone/music/navigation information, key events, camera management, disconnect, car configuration, app lists/details, app invocation/state, POI and call state. It separately defines `AudioIndex.audio_type`.
+
+This is a useful map of the post-auth feature protocol, but field numbers inside a protobuf envelope are **not** the UCar outer `methodIndex`. Do not conflate them.
+
+### 13.4 What this changes in the investigation
+
+We can now document the authentication data contract exactly from the packaged schema and distinguish it from the still-unresolved outer command mapping. The next bytecode task remains finding the runtime caller(s) of `createAuthRequestMessage`, `createAuthResponseMessage`, `createAuthConfirmMessage`, and `createCarCertificateMessage`, then resolving the numeric `methodIndex` values and send order from those callers. Do not implement a synthetic auth exchange: the schema contains cryptographic fields whose validity depends on the actual key/certificate machinery and peer state.
