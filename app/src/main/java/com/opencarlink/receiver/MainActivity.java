@@ -1,10 +1,15 @@
 package com.opencarlink.receiver;
 
 import android.app.Activity;
+import android.app.PendingIntent;
+import android.content.BroadcastReceiver;
 import android.content.Context;
+import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.pm.PackageManager;
 import android.hardware.usb.UsbConstants;
 import android.hardware.usb.UsbDevice;
+import android.hardware.usb.UsbDeviceConnection;
 import android.hardware.usb.UsbEndpoint;
 import android.hardware.usb.UsbInterface;
 import android.hardware.usb.UsbManager;
@@ -25,14 +30,55 @@ import java.util.Locale;
 import java.util.Map;
 
 public class MainActivity extends Activity {
+    private static final String ACTION_USB_PERMISSION = "com.opencarlink.receiver.USB_PERMISSION";
     private LinearLayout root;
     private TextView diagnostics;
+    private TextView usbTestStatus;
+    private UsbManager usbManager;
+    private boolean receiverRegistered;
+    private final BroadcastReceiver usbPermissionReceiver = new BroadcastReceiver() {
+        @Override public void onReceive(Context context, Intent intent) {
+            if (!ACTION_USB_PERMISSION.equals(intent.getAction())) return;
+            UsbDevice device = intent.getParcelableExtra(UsbManager.EXTRA_DEVICE);
+            boolean granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false);
+            if (device == null) {
+                setUsbStatus("USB 权限结果异常：系统未返回设备信息。");
+            } else if (!granted) {
+                setUsbStatus("未获得 USB 访问权限。你可以重新点击按钮，或检查系统权限提示。");
+            } else {
+                setUsbStatus("已获得 USB 访问权限，正在测试打开连接……");
+                testOpenAndClose(device);
+            }
+            refreshDiagnostics();
+        }
+    };
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        usbManager = (UsbManager) getSystemService(Context.USB_SERVICE);
+        registerUsbReceiver();
         buildUi();
         refreshDiagnostics();
+    }
+
+    private void registerUsbReceiver() {
+        IntentFilter filter = new IntentFilter(ACTION_USB_PERMISSION);
+        if (Build.VERSION.SDK_INT >= 33) {
+            registerReceiver(usbPermissionReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
+        } else {
+            registerReceiver(usbPermissionReceiver, filter);
+        }
+        receiverRegistered = true;
+    }
+
+    @Override
+    protected void onDestroy() {
+        if (receiverRegistered) {
+            try { unregisterReceiver(usbPermissionReceiver); } catch (IllegalArgumentException ignored) { }
+            receiverRegistered = false;
+        }
+        super.onDestroy();
     }
 
     private void buildUi() {
@@ -52,7 +98,7 @@ public class MainActivity extends Activity {
         root.addView(title, matchWrap());
 
         TextView subtitle = new TextView(this);
-        subtitle.setText("车机兼容性诊断工具 · 版本 0.1.1");
+        subtitle.setText("车机兼容性诊断工具 · 版本 0.1.2");
         subtitle.setTextColor(0xFFB7C5D3);
         subtitle.setTextSize(13);
         subtitle.setPadding(0, dp(6), 0, dp(18));
@@ -64,6 +110,22 @@ public class MainActivity extends Activity {
             @Override public void onClick(View v) { refreshDiagnostics(); }
         });
         root.addView(refresh, matchWrap());
+
+        Button usbTest = new Button(this);
+        usbTest.setText("申请 USB 权限并测试打开连接");
+        usbTest.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { requestUsbPermissionAndTest(); }
+        });
+        LinearLayout.LayoutParams buttonParams = matchWrap();
+        buttonParams.topMargin = dp(8);
+        root.addView(usbTest, buttonParams);
+
+        usbTestStatus = new TextView(this);
+        usbTestStatus.setText("USB 连接测试：尚未执行。此测试不会向设备发送数据。");
+        usbTestStatus.setTextColor(0xFFB7C5D3);
+        usbTestStatus.setTextSize(13);
+        usbTestStatus.setPadding(0, dp(8), 0, dp(8));
+        root.addView(usbTestStatus, matchWrap());
 
         diagnostics = new TextView(this);
         diagnostics.setTextColor(0xFFE6EDF3);
@@ -78,6 +140,70 @@ public class MainActivity extends Activity {
         note.setTextSize(14);
         note.setPadding(0, dp(10), 0, dp(10));
         root.addView(note, matchWrap());
+    }
+
+    private void requestUsbPermissionAndTest() {
+        if (usbManager == null) {
+            setUsbStatus("USB 服务不可用。");
+            return;
+        }
+        Map<String, UsbDevice> devices = usbManager.getDeviceList();
+        if (devices == null || devices.isEmpty()) {
+            setUsbStatus("未检测到 USB 设备。请确认发送端已通过 USB 连接，并点击刷新诊断信息。");
+            refreshDiagnostics();
+            return;
+        }
+        UsbDevice device = devices.values().iterator().next();
+        if (usbManager.hasPermission(device)) {
+            setUsbStatus("应用已经拥有 USB 权限，正在测试打开连接……");
+            testOpenAndClose(device);
+            refreshDiagnostics();
+            return;
+        }
+        try {
+            Intent intent = new Intent(ACTION_USB_PERMISSION);
+            intent.setPackage(getPackageName());
+            int flags = PendingIntent.FLAG_UPDATE_CURRENT;
+            if (Build.VERSION.SDK_INT >= 31) flags |= PendingIntent.FLAG_MUTABLE;
+            PendingIntent permissionIntent = PendingIntent.getBroadcast(this, 0, intent, flags);
+            setUsbStatus("已请求系统授予 USB 权限，请在系统弹窗中允许。");
+            usbManager.requestPermission(device, permissionIntent);
+        } catch (Exception e) {
+            setUsbStatus("请求 USB 权限失败：" + e.getClass().getSimpleName() + "：" + safeMessage(e));
+        }
+    }
+
+    private void testOpenAndClose(UsbDevice device) {
+        UsbDeviceConnection connection = null;
+        try {
+            connection = usbManager.openDevice(device);
+            if (connection == null) {
+                setUsbStatus("已获 USB 权限，但 openDevice() 返回空。设备可能被系统占用，或当前 USB 连接不允许打开。");
+                return;
+            }
+            String deviceName = device.getDeviceName();
+            int interfaceCount = device.getInterfaceCount();
+            setUsbStatus("USB 打开测试成功，随后已关闭连接。设备节点：" + deviceName
+                    + "；接口数：" + interfaceCount
+                    + "。未声明接口、未读取/写入端点、未发送任何数据。");
+        } catch (SecurityException e) {
+            setUsbStatus("打开 USB 失败：权限异常。请重新授权后重试。");
+        } catch (Exception e) {
+            setUsbStatus("打开 USB 失败：" + e.getClass().getSimpleName() + "：" + safeMessage(e));
+        } finally {
+            if (connection != null) {
+                try { connection.close(); } catch (Exception ignored) { }
+            }
+        }
+    }
+
+    private String safeMessage(Exception e) {
+        String message = e.getMessage();
+        return message == null || message.trim().length() == 0 ? "无详细错误信息" : message;
+    }
+
+    private void setUsbStatus(String message) {
+        if (usbTestStatus != null) usbTestStatus.setText("USB 连接测试：" + message);
     }
 
     private void refreshDiagnostics() {
@@ -97,7 +223,6 @@ public class MainActivity extends Activity {
         out.append("\n\n【USB 连接】\n");
         boolean usbHost = getPackageManager().hasSystemFeature(PackageManager.FEATURE_USB_HOST);
         out.append("USB 主机功能：").append(usbHost ? "支持" : "系统未报告").append("\n");
-        UsbManager usbManager = (UsbManager) getSystemService(Context.USB_SERVICE);
         Map<String, UsbDevice> devices = usbManager == null ? null : usbManager.getDeviceList();
         if (devices == null || devices.isEmpty()) {
             out.append("当前未检测到 USB 设备\n");
@@ -131,9 +256,7 @@ public class MainActivity extends Activity {
             } else {
                 int count = MediaCodecList.getCodecCount();
                 codecs = new MediaCodecInfo[count];
-                for (int i = 0; i < count; i++) {
-                    codecs[i] = MediaCodecList.getCodecInfoAt(i);
-                }
+                for (int i = 0; i < count; i++) codecs[i] = MediaCodecList.getCodecInfoAt(i);
             }
             int found = 0;
             for (MediaCodecInfo codec : codecs) {
@@ -151,13 +274,13 @@ public class MainActivity extends Activity {
             out.append("读取解码器信息失败：").append(error.getClass().getSimpleName()).append("\n");
         }
 
-        out.append("\n【下一步】\n");
-        out.append("请比较切换发送端 USB 用途前后的 VID/PID、接口类别及端点信息。若这些信息完全一致，说明 Android USB 主机 API 暂未观察到模式变化；这本身不能证明 ICCOA 协议是否存在。\n");
-        out.append("本版本仅收集公开 USB 描述符信息，不会自动申请 USB 权限或向设备发送数据。\n");
+        out.append("\n【USB 测试说明】\n");
+        out.append("点击上方“申请 USB 权限并测试打开连接”后，系统可能显示授权弹窗。授权后仅调用 openDevice() 并立即关闭；不会 claim 接口、读取端点或向设备发送数据。\n");
+        out.append("USB 描述符和成功打开设备都不能单独证明 ICCOA 协议存在。\n");
         diagnostics.setText(out.toString());
     }
 
-    private void appendUsbDevice(StringBuilder out, UsbManager usbManager, UsbDevice device) {
+    private void appendUsbDevice(StringBuilder out, UsbManager manager, UsbDevice device) {
         out.append("\n设备：").append(device.getDeviceName()).append("\n");
         out.append("VID：").append(hex4(device.getVendorId())).append(" (").append(device.getVendorId()).append(")\n");
         out.append("PID：").append(hex4(device.getProductId())).append(" (").append(device.getProductId()).append(")\n");
@@ -167,22 +290,16 @@ public class MainActivity extends Activity {
            .append(hex2(device.getDeviceProtocol())).append("\n");
         out.append("接口数量：").append(device.getInterfaceCount()).append("\n");
         out.append("本应用已获 USB 访问权限：")
-           .append(usbManager.hasPermission(device) ? "是" : "否（当前版本不会自动申请）").append("\n");
+           .append(manager.hasPermission(device) ? "是" : "否").append("\n");
 
-        if (Build.VERSION.SDK_INT >= 21) {
+        if (Build.VERSION.SDK_INT >= 21 && manager.hasPermission(device)) {
             try {
                 String manufacturer = device.getManufacturerName();
                 String product = device.getProductName();
                 String serial = device.getSerialNumber();
-                if (manufacturer != null && manufacturer.length() > 0) {
-                    out.append("USB 制造商字符串：").append(manufacturer).append("\n");
-                }
-                if (product != null && product.length() > 0) {
-                    out.append("USB 产品字符串：").append(product).append("\n");
-                }
-                if (serial != null && serial.length() > 0) {
-                    out.append("USB 序列号：").append(serial).append("\n");
-                }
+                if (manufacturer != null && manufacturer.length() > 0) out.append("USB 制造商字符串：").append(manufacturer).append("\n");
+                if (product != null && product.length() > 0) out.append("USB 产品字符串：").append(product).append("\n");
+                if (serial != null && serial.length() > 0) out.append("USB 序列号：").append(serial).append("\n");
             } catch (SecurityException e) {
                 out.append("USB 字符串描述符：系统未授权读取\n");
             } catch (Exception e) {
@@ -219,13 +336,8 @@ public class MainActivity extends Activity {
         }
     }
 
-    private String hex2(int value) {
-        return String.format(Locale.US, "0x%02X", value & 0xFF);
-    }
-
-    private String hex4(int value) {
-        return String.format(Locale.US, "0x%04X", value & 0xFFFF);
-    }
+    private String hex2(int value) { return String.format(Locale.US, "0x%02X", value & 0xFF); }
+    private String hex4(int value) { return String.format(Locale.US, "0x%04X", value & 0xFFFF); }
 
     private LinearLayout.LayoutParams matchWrap() {
         return new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
