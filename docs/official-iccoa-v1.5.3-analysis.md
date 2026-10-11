@@ -765,3 +765,26 @@ The two start paths therefore live under separate parent methods: certificate st
 When collecting a permitted test trace, record timestamps for: AOA accessory connection, `UCarAdapter.startUCarChannel`, `CarCertManager` channel `onConnect`, `ShareLinkService.startAuthService`, `UCarAuthService` channel `onConnect`, first AuthRequest/AuthResponse, AuthConfirm handling, and certificate message send. These events distinguish source-code call ordering from asynchronous socket-connect ordering.
 
 Do not change the receiver to send authentication or certificate payloads merely because a candidate port is known. First establish which side opens each socket and the observed create-socket messages on the AOA bridge.
+
+
+## 28. Receive dispatch: request/response completion precedes channel handler
+
+The recovered `SocketChannelReadTask.lambda$run$0$SocketChannelReadTask(ProtocolLogger, UCarMessage)` method provides a concrete endpoint for the receive path. Its call sequence is:
+
+1. If debug logging is enabled, dump/log the decoded `UCarMessage`.
+2. Obtain the singleton `FutureRequestManager` and call `complete(UCarMessage)`.
+3. Call `SocketChannel.onMessage(UCarMessage)`.
+4. Call `UCarMessage.release()` after dispatch.
+
+This means a decoded message is first offered to the pending request/response manager, then passed to the channel's message handler. It is not safe to implement the receiver as a simple “every inbound message goes directly to the auth callback” pipeline: request correlation and channel-specific dispatch are separate steps.
+
+### Implications for a compatible receiver
+
+- Keep sequence-ID matching/request completion separate from the channel's application-level handler.
+- Ensure the message/body buffer remains valid through both completion and handler dispatch; only release/recycle it at the lifecycle point consistent with the official code.
+- Log header metadata, channel type, sequence ID, and dispatch result without logging private keys, certificates, or decrypted authentication payloads.
+- Preserve the distinction between “frame decoded”, “request matched”, “handler accepted”, and “authentication succeeded”; they are different states.
+
+### Still unresolved
+
+This call sequence alone does not reveal the full sequence-ID matching rules inside `FutureRequestManager.complete`, nor whether all message types are eligible for completion. The manager's implementation and `SocketChannel.onMessage` branches must be inspected next. The CRC algorithm's initial value/update expression and runtime channel-port mapping also remain unverified.
