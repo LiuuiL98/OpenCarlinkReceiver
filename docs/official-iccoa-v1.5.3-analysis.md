@@ -555,3 +555,37 @@ The DEX instruction walk did not yet establish:
 - the `ChannelType`/port values and which channel is used for auth versus control/media;
 - whether all channels use encryption, and the exact encrypted body/nonce framing;
 - certificate/auth startup ordering and retry/error transitions.
+
+
+## 20. Header validation and stream-read helper: confirmed CRC call sites
+
+This pass extracted the APK's DEX files and parsed the relevant method bodies' invoke instructions. Unlike the earlier class inventory, this confirms the exact CRC helper calls inside the header parsing methods.
+
+### 20.1 CRC is checked during header construction/assignment
+
+Both `MessageHeader.createMessageHeaderFromBytes(byte[])` and `MessageHeader.assign(byte[])` invoke `ByteUtil.readIntFromBytes`, `ByteUtil.readShortFromBytes`, and `Crc16.checksum(byte[], int, int)`. Both methods also have a `ProtocolException` construction path after the checksum operation. Therefore, header CRC verification is part of the header decode path; it is not a separate check visible only in the socket reader.
+
+The recovered call sequence is:
+- decode the integer header fields;
+- decode the two short fields, including the stored checksum;
+- calculate CRC using `Crc16.checksum(byte[], offset, length)`;
+- take the normal or `ProtocolException` path according to the comparison.
+
+The instruction-reference scan establishes the checksum and exception call sites. The exact branch predicate, exception message, and all field offsets should still be checked against the actual instruction operands before writing a byte-for-byte compatible parser.
+
+### 20.2 Read helper and allocation behavior
+
+`SocketChannelReadTask.fillBuffer(ReadableByteChannel, ByteBuffer, int)` calls `ByteBuffer.limit(int)` and repeatedly invokes `ReadableByteChannel.read(ByteBuffer)`, with logging paths for progress/error conditions. This is the shared helper used to fill the fixed header buffer and then the body buffer, so partial reads are handled at the stream layer rather than assumed to correspond to one read call.
+
+`allocBodyBuff(int, ByteBuffer)` checks the supplied buffer's capacity and calls `clear()` when a reusable buffer is adequate; otherwise it calls `ByteBuffer.allocate(int)`. This shows buffer reuse, but the method-invoke scan alone does not establish a maximum body-size guard. The caller's length validation and branch conditions still need direct control-flow review.
+
+### 20.3 Error handling
+
+The read loop has a `ProtocolException` handling path that logs the failure and closes the `SocketChannel`. The body allocation path and exact handling of negative, undersized, or excessively large declared lengths still require direct branch-level verification. Do not assume malformed frames are safely rejected until those branches are reviewed.
+
+### 20.4 Concrete next items
+
+- Inspect the actual DEX branch around `Crc16.checksum` to record the exact checksum byte range and stored/calculated comparison.
+- Decode the `fillBuffer` loop's branch targets to document EOF, zero-byte reads, and retry behavior.
+- Confirm whether `SocketChannelReadTask.run()` validates total length against the 20-byte header size and a fixed maximum before allocation.
+- Inspect `ChannelType` enum values and the construction call sites to recover which port/channel carries authentication.
