@@ -580,8 +580,8 @@ public class MainActivity extends Activity {
                 UsbInterface claimedInterface = null;
                 String result;
                 try {
-                    if (device.getVendorId() != AOA_VENDOR_ID || device.getProductId() != AOA_PRODUCT_ID) {
-                        result = "只读测试已取消：设备 VID/PID 已变化，请刷新诊断信息后重试。";
+                    if (device.getVendorId() != AOA_VENDOR_ID || !isAoaAccessoryProductId(device.getProductId())) {
+                        result = "只读测试已取消：设备 VID/PID 已变化或不再包含 AOA 配件接口，请刷新诊断信息后重试。";
                     } else {
                         connection = usbManager.openDevice(device);
                         if (connection == null) {
