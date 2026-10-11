@@ -915,3 +915,24 @@ This upgrades the polynomial/table finding from a fingerprint-based inference to
 The verification used the `fill-array-data` payload referenced by the static initializer, parsed as 256 little-endian 32-bit entries, and compared each entry to eight iterations of:
 `c = (c >> 1) ^ ((c & 1) ? 0xA001 : 0)`.
 The comparison returned `True` for all 256 entries. This is a table validation, not yet an end-to-end frame checksum test.
+
+
+## 35. CRC header-check boundary: not yet proven by the available evidence
+
+The checksum table is now verified exactly against the reflected `0xA001` table generator, but that does not establish the bytes passed to `Crc16.checksum` from `MessageHeader`. The relevant call sites are `MessageHeader.assign(byte[])` and `MessageHeader.createMessageHeaderFromBytes(byte[])`; the methods also parse fields from fixed offsets and compare a stored 16-bit value at header offset 18.
+
+### Header facts already established
+
+- Header minimum size is 20 bytes.
+- The stored checksum field is at byte offsets 18–19.
+- The integer and short helpers use big-endian encoding.
+- Invalid header length and checksum mismatch follow exception paths.
+
+### What is still unknown
+
+- Whether the checksum input includes the checksum field itself or excludes it.
+- Whether checksum begins at offset 0 or a later header field.
+- Whether the length passed is a fixed header length, a prefix length, or a field-dependent range.
+- The complete accumulator initialization/update/finalization formula.
+
+The safe next step is to inspect the exact DEX invoke arguments and branch around each checksum call, then cross-check both parsing methods for identical coverage. No receiver-side CRC implementation should be considered compatible until that range and arithmetic are both recovered and tested against an actual valid frame.
