@@ -43,7 +43,7 @@ public class MainActivity extends Activity {
     private final BroadcastReceiver usbPermissionReceiver = new BroadcastReceiver() {
         @Override public void onReceive(Context context, Intent intent) {
             String action = intent.getAction();
-            if (!ACTION_USB_PERMISSION.equals(action) && !ACTION_AOA_PERMISSION.equals(action)) return;
+            if (!ACTION_USB_PERMISSION.equals(action) && !ACTION_AOA_PERMISSION.equals(action) && !ACTION_AOA_DATA_PERMISSION.equals(action)) return;
             boolean aoaRequest = ACTION_AOA_PERMISSION.equals(action);
             UsbDevice device = intent.getParcelableExtra(UsbManager.EXTRA_DEVICE);
             boolean granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false);
@@ -112,7 +112,7 @@ public class MainActivity extends Activity {
         root.addView(title, matchWrap());
 
         TextView subtitle = new TextView(this);
-        subtitle.setText("车机兼容性诊断工具 · 版本 0.1.5");
+        subtitle.setText("车机兼容性诊断工具 · 版本 0.1.6");
         subtitle.setTextColor(0xFFB7C5D3);
         subtitle.setTextSize(13);
         subtitle.setPadding(0, dp(6), 0, dp(18));
@@ -279,7 +279,7 @@ public class MainActivity extends Activity {
             int flags = PendingIntent.FLAG_UPDATE_CURRENT;
             if (Build.VERSION.SDK_INT >= 31) flags |= PendingIntent.FLAG_MUTABLE;
             PendingIntent permissionIntent = PendingIntent.getBroadcast(this, 2, intent, flags);
-            setUsbStatus("正在单独申请 AOA 配件 18D1:2D00 的 USB 权限。授权后只进行 Bulk IN 读取，不会向设备写入数据。");
+            setUsbStatus("正在单独申请 AOA 配件 18D1:2D00 的 USB 权限。授权后只进行 Bulk IN 读取，不会向设备写入数据。若系统已授权，点击按钮会直接开始测试。");
             usbManager.requestPermission(device, permissionIntent);
         } catch (Exception e) {
             setUsbStatus("申请 AOA 配件权限失败：" + e.getClass().getSimpleName() + "：" + safeMessage(e));
@@ -397,7 +397,7 @@ public class MainActivity extends Activity {
                     "OpenCarlinkReceiver",
                     "OpenCarlinkReceiver experimental AOA probe",
                     "Experimental AOA transport probe",
-                    "0.1.4",
+                    "0.1.6",
                     "https://github.com/LiuuiL98/OpenCarlinkReceiver",
                     "OCR-ANDROID-RECEIVER"
             };
