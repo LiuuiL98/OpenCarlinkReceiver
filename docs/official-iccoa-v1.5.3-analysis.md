@@ -304,3 +304,64 @@ This is a useful map of the post-auth feature protocol, but field numbers inside
 ### 13.4 What this changes in the investigation
 
 We can now document the authentication data contract exactly from the packaged schema and distinguish it from the still-unresolved outer command mapping. The next bytecode task remains finding the runtime caller(s) of `createAuthRequestMessage`, `createAuthResponseMessage`, `createAuthConfirmMessage`, and `createCarCertificateMessage`, then resolving the numeric `methodIndex` values and send order from those callers. Do not implement a synthetic auth exchange: the schema contains cryptographic fields whose validity depends on the actual key/certificate machinery and peer state.
+
+
+## 14. Runtime caller trace: auth response and certificate send
+
+A targeted DEX instruction pass found the first concrete runtime caller sites for the protocol builders. This is stronger than method inventory alone because it reveals the callback branches and the outbound send calls.
+
+### 14.1 Confirmed numeric method-index map
+
+The generated lookup map in `UCarAuthProtocol$1.<init>()` maps:
+- method index `1` → `auth_request`
+- method index `2` → `auth_response`
+- method index `3` → `auth_confirm`
+
+The corresponding `UCarCertProtocol$1.<init>()` map maps:
+- method index `1` → `certificate`
+
+These are outer UCar method-index names registered by each protocol class. They are distinct from the protobuf field numbers in `AuthIndex` / `CertIndex`.
+
+### 14.2 Authentication service callback
+
+The method `com.share.connect.security.UCarAuthService.lambda$new$0$UCarAuthService(int, int, String, boolean, UCarMessage)` has two visible branches:
+
+**Incoming auth request branch**
+1. Calls `UCarAuthProtocol.isAuthRequestMessage(message)`.
+2. Parses the request with `parseAuthRequestMessage(message)`.
+3. Reads the request's phone ID and optional work modes / product name, and reports client key-negotiation information to `UCarAuthObserver`.
+4. Calls `ServerKeyNegotiator.generateKeyNegotiationInfo(request, ...)` to build an `AuthResponse`.
+5. Calls `createAuthResponseMessage(response, incomingMessage.getSeqId())`.
+6. Sends the response through `ConnectChannel.send(message, callback)`.
+
+This is direct bytecode evidence that the receiver's auth service responds to a phone-originated `AuthRequest`, and that the response builder is given the incoming message's sequence ID.
+
+**Incoming auth confirm branch**
+1. Calls `isAuthConfirmMessage(message)`, then `parseAuthConfirmMessage(message)`.
+2. Reads `AuthConfirm.cipher`, converts it to bytes, and calls `SecurityManager.decrypt(byte[])`.
+3. Converts the decrypted bytes to a string and splits it on `:`.
+4. Passes the resulting connection information to `UCarAuthObserver.onClientConnectionInfoReceived(String, int)`.
+
+This establishes the receiver-side post-confirm processing path. The bytecode excerpt shows a colon-delimited plaintext being split into connection information; the exact validation/error handling and cryptographic algorithm must be followed into `SecurityManager` before implementing it.
+
+### 14.3 Certificate send caller
+
+`com.ucar.vehiclesdk.datacenter.CarCertManager$1.onConnect()`:
+1. Creates a `CarVerifier` using the application context.
+2. Calls `CarVerifier.readCarData()`.
+3. If the returned string is empty, logs `failed to get car cert data` and returns.
+4. Otherwise logs `sending car certificate to phone`.
+5. Wraps the returned string's UTF-8 bytes in `CarCertificate.content`.
+6. Calls `UCarCertProtocol.createCarCertificateMessage(certificate)`.
+7. Sends it with the certificate manager's `send(UCarMessage, SendFutureCallback)` method.
+
+This is evidence that the certificate message body is the UTF-8 bytes of the string returned by `CarVerifier.readCarData()`. It is not evidence that the value is a PEM certificate, DER certificate, or a valid credential when fabricated. We must inspect `CarVerifier` and its storage/verification dependencies next.
+
+### 14.4 Immediate next targets
+
+1. Inspect `ServerKeyNegotiator.generateKeyNegotiationInfo` and `SecurityManager.decrypt` / related key derivation and verification routines.
+2. Inspect `CarVerifier.readCarData()` to determine the certificate source and expected representation.
+3. Inspect the construction of `UCarAuthService` and `CarCertManager` to establish which channels deliver these messages and when the certificate send is triggered relative to authentication.
+4. Inspect `ConnectChannel.send` and the inbound message dispatcher to establish the exact transport path for UCar frames.
+
+Do not assume certificate-send timing from the method name `onConnect` alone. The caller establishes that it runs on a connection callback, but its ordering relative to auth must be confirmed from object wiring and channel lifecycle code.
