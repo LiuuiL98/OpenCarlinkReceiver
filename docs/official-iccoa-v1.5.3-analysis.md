@@ -207,3 +207,43 @@ The diagnostic UI now records the requested Bulk IN buffer length separately fro
 This is deliberately a probe, not a decoder: the output does not label either word as a length, channel ID, or command, and it does not allocate a body buffer or transmit any response. The official read-thread structure supports investigating an eight-byte prefix, but the available evidence still does not establish the prefix's byte order or length formula.
 
 After collecting a new trace, compare the two candidate interpretations across several consecutive reads and correlate them with the official receiver's first-header/body-read sequence. Do not choose an interpretation from one sample alone.
+
+
+## 12. Follow-up bytecode pass: socket bridge and dispatch
+
+A second targeted pass inspected the complete instruction bodies for `AOAConnectManager$AOAReadThread.run()`, `AOAConnectManager.handleCreateSocket(byte[], int)`, the synthetic dispatch accessors, `SocketReadThread.run()`, `SocketReadThread.writeData(byte[], int, int)`, and `UCarMessageBuilder.buildProtobufMessage(...)`.
+
+### 12.1 Dispatch is a socket bridge, not a direct UCar parser
+
+- The read thread invokes the manager's synthetic `access$100(manager, body, value)`; that accessor immediately delegates to `handleCreateSocket(body, value)`.
+- For the non-create-socket path, it invokes `access$200(manager, channelId)`, which delegates to `getReadThreadByChannelId(channelId)`.
+- If a matching `SocketReadThread` exists, the read thread forwards the received body and associated integer arguments to `SocketReadThread.writeData(byte[], int, int)`.
+- `writeData` writes the supplied byte range to a `BufferedOutputStream` and flushes it. This is direct evidence that the AOA transport forwards payload data into a socket stream; it does not parse each forwarded payload as a `MessageHeader` in this method.
+
+### 12.2 SocketReadThread owns the network-side stream
+
+The bytecode for `SocketReadThread.run()` shows it waiting for/obtaining a socket, wrapping the socket input and output streams in `BufferedInputStream` and `BufferedOutputStream`, and calling `peerCreateProxyClientSocket()`. This supports a USB-to-socket proxy/bridge model: AOA carries channel setup/data, and each channel can be connected to a network socket. The exact application-level payload protocol still depends on the channel and must be traced separately.
+
+### 12.3 Create-socket record layout
+
+`handleCreateSocket(byte[], int)` checks that the input record is at least 10 bytes before reading:
+- a 32-bit integer at offset 0;
+- a 32-bit integer at offset 4;
+- an unsigned byte at offset 8;
+- an unsigned byte at offset 9.
+
+The implementation logs these decoded values as `port`, `channelId`, `socketType`, and `channelMsgType`, and branches into server- or client-socket creation logic. Since the integer reads use `ByteConvert.bytesToInt(byte[], int)`, the previously confirmed big-endian helper applies to the two 32-bit fields. The minimum 10-byte check is confirmed; this pass does not establish that every record is exactly 10 bytes or fully document enum values.
+
+### 12.4 Protobuf builder serialization path
+
+`UCarMessageBuilder.buildProtobufMessage(GeneratedMessageLite)`:
+1. sets the data format to `PB3`;
+2. serializes the protobuf using `toByteArray()`;
+3. builds a `CmdDescription` from source device, data format, message type, category, and method index;
+4. constructs a `MessageHeader` and then a `UCarMessage` containing the header and serialized bytes.
+
+This confirms that the UCar wrapper is a header-plus-protobuf-body format. It does not establish how such UCar messages are transported over a particular AOA socket channel.
+
+### Updated implementation consequence
+
+Do not treat every AOA body as a UCar message. First reproduce the AOA transport's header/body read sequence and socket-creation/data-forwarding behavior. Separately trace which socket channel, if any, carries UCar messages and where that stream is decoded. Keep these two framing layers separate in both code and logs.
