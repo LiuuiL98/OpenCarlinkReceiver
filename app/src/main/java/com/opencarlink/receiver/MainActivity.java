@@ -653,6 +653,34 @@ public class MainActivity extends Activity {
         }
     }
 
+    /**
+     * Read-only diagnostic probe for the official receiver's observed 8-byte
+     * AOA transport prefix. This intentionally reports both endian candidates
+     * and does not assign field names or infer a body length.
+     */
+    private String probeAoaTransportHeader(byte[] data, int length) {
+        if (data == null || length < 8 || data.length < 8) return "unavailable";
+        long firstBe = ((long)(data[0] & 0xFF) << 24)
+                | ((long)(data[1] & 0xFF) << 16)
+                | ((long)(data[2] & 0xFF) << 8)
+                | (long)(data[3] & 0xFF);
+        long secondBe = ((long)(data[4] & 0xFF) << 24)
+                | ((long)(data[5] & 0xFF) << 16)
+                | ((long)(data[6] & 0xFF) << 8)
+                | (long)(data[7] & 0xFF);
+        long firstLe = ((long)(data[3] & 0xFF) << 24)
+                | ((long)(data[2] & 0xFF) << 16)
+                | ((long)(data[1] & 0xFF) << 8)
+                | (long)(data[0] & 0xFF);
+        long secondLe = ((long)(data[7] & 0xFF) << 24)
+                | ((long)(data[6] & 0xFF) << 16)
+                | ((long)(data[5] & 0xFF) << 8)
+                | (long)(data[4] & 0xFF);
+        return "raw8=" + bytesToHex(data, 8)
+                + ",u32be=[" + firstBe + "," + secondBe + "]"
+                + ",u32le=[" + firstLe + "," + secondLe + "]";
+    }
+
     private void testAoaBulkRead(final UsbDevice device) {
         Thread worker = new Thread(new Runnable() {
             @Override public void run() {
@@ -717,7 +745,10 @@ public class MainActivity extends Activity {
                                         totalBytes += count;
                                         successfulReads++;
                                         appendTraceLine("BULK_IN_PACKET index=" + successfulReads
-                                                + " elapsed_ms=" + elapsedMs + " length=" + count
+                                                + " elapsed_ms=" + elapsedMs
+                                                + " requested_length=" + buffer.length
+                                                + " returned_length=" + count
+                                                + " transport_header_probe=" + probeAoaTransportHeader(buffer, count)
                                                 + " hex=" + bytesToHex(buffer, count));
                                         int sampleLimit = Math.min(count, Math.max(0, (512 - sampleHex.length() / 3)));
                                         for (int k = 0; k < sampleLimit; k++) {
