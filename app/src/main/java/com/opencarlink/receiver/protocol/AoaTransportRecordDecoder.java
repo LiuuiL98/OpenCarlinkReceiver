@@ -1,6 +1,5 @@
 package com.opencarlink.receiver.protocol;
 
-import java.io.ByteArrayOutputStream;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -79,11 +78,17 @@ public final class AoaTransportRecordDecoder {
                 headerCount += copied;
                 if (headerCount < AoaTransportHeaderProbe.HEADER_LENGTH) continue;
 
-                currentHeader = AoaTransportHeaderProbe.decode(header, header.length);
-                if (currentHeader.bodyLength > maxBodyLength) {
+                try {
+                    currentHeader = AoaTransportHeaderProbe.decode(header, header.length);
+                } catch (IllegalArgumentException invalidHeader) {
+                    resetCurrentRecord();
+                    throw invalidHeader;
+                }
+                int declaredLength = currentHeader.bodyLength;
+                if (declaredLength > maxBodyLength) {
                     resetCurrentRecord();
                     throw new IllegalArgumentException("body length exceeds local cap: "
-                            + currentHeader.bodyLength + " > " + maxBodyLength);
+                            + declaredLength + " > " + maxBodyLength);
                 }
                 wireBody = new byte[currentHeader.requestedBodyReadLength()];
                 bodyCount = 0;
