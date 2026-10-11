@@ -957,3 +957,25 @@ Keep the header parser and checksum function isolated behind a small interface. 
 - a valid official frame once a non-sensitive test capture is available.
 
 Do not hard-code a checksum coverage range until both call sites are decoded and compared. This update records the evidence boundary; it does not claim the CRC arithmetic or coverage has been fully recovered.
+
+
+## 37. Confirmed CRC coverage: header bytes 0 through 17, excluding stored CRC
+
+A corrected instruction-width pass over the DEX code items now resolves the argument registers at both `MessageHeader` checksum call sites.
+
+### `createMessageHeaderFromBytes(byte[])`
+
+The method reads the stored 16-bit header checksum at offset `0x12` (decimal 18). Immediately before the checksum call, the code sets the start argument to `0` and the length argument to `0x12` (decimal 18), then invokes `Crc16.checksum(byte[], int, int)` with the original byte array. Thus the checksum input is `bytes[0..17]`, exactly 18 bytes, and excludes the two checksum bytes at offsets 18–19.
+
+### `assign(byte[])`
+
+The parallel parser reads the stored checksum at offset `0x12` and calls the same byte-array overload with start `0` and length `0x12`. This agrees with `createMessageHeaderFromBytes`.
+
+### Confirmed result
+
+- Header length minimum: 20 bytes.
+- Stored checksum: big-endian short at offset 18.
+- CRC input: bytes at offsets 0–17 (18 bytes).
+- Stored CRC bytes 18–19 are not included in the CRC calculation.
+
+This coverage conclusion comes from the actual call arguments and constant values in the DEX, decoded using the DEX instruction formats. It is independent of the still-unresolved CRC accumulator initialization and finalization. The Android DEX bytecode reference documents register operands and instruction formats: https://source.android.com/docs/core/runtime/dalvik-bytecode.
