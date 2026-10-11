@@ -1,6 +1,7 @@
 package com.opencarlink.receiver;
 
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.app.PendingIntent;
 import android.content.BroadcastReceiver;
 import android.content.Context;
@@ -22,11 +23,14 @@ import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
+import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 
+import java.text.SimpleDateFormat;
+import java.util.Date;
 import java.util.Locale;
 import java.util.Map;
 
@@ -38,6 +42,14 @@ public class MainActivity extends Activity {
     private static final int AOA_PRODUCT_ID = 0x2D00;
     private LinearLayout root;
     private TextView diagnostics;
+    private TextView diagnosticEventLog;
+    private CheckBox phoneDebugCheck;
+    private CheckBox phoneUnlockedCheck;
+    private boolean diagnosticSessionActive;
+    private String diagnosticSessionId = "未开始";
+    private final StringBuilder diagnosticLog = new StringBuilder();
+    private static final String PREFS_DIAGNOSTICS = "usb_aoa_diagnostics";
+    private static final String PREF_EVENT_LOG = "event_log";
     private TextView usbTestStatus;
     private EditText aoaManufacturerInput, aoaModelInput, aoaDescriptionInput, aoaVersionInput, aoaUriInput;
     private EditText carModIdInput, carIdInput, carShortNameInput, usbPinCodeInput, carProtocolVersionInput, carVendorDataInput;
@@ -50,6 +62,8 @@ public class MainActivity extends Activity {
             boolean aoaRequest = ACTION_AOA_PERMISSION.equals(action);
             UsbDevice device = intent.getParcelableExtra(UsbManager.EXTRA_DEVICE);
             boolean granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false);
+            recordEvent("USB_PERMISSION", "系统权限回调：action=" + action + "，granted=" + granted
+                    + (device == null ? "" : "，设备=" + hex4(device.getVendorId()) + ":" + hex4(device.getProductId())));
             if (device == null) {
                 setUsbStatus("USB 权限结果异常：系统未返回设备信息。");
             } else if (!granted) {
@@ -74,6 +88,7 @@ public class MainActivity extends Activity {
         usbManager = (UsbManager) getSystemService(Context.USB_SERVICE);
         registerUsbReceiver();
         buildUi();
+        loadDiagnosticLog();
         refreshDiagnostics();
     }
 
@@ -115,16 +130,51 @@ public class MainActivity extends Activity {
         root.addView(title, matchWrap());
 
         TextView subtitle = new TextView(this);
-        subtitle.setText("车机兼容性诊断工具 · 版本 0.2.1");
+        subtitle.setText("车机兼容性诊断工具 · 版本 0.2.2");
         subtitle.setTextColor(0xFFB7C5D3);
         subtitle.setTextSize(13);
         subtitle.setPadding(0, dp(6), 0, dp(18));
         root.addView(subtitle, matchWrap());
 
+        TextView precheckTitle = new TextView(this);
+        precheckTitle.setText("连接前置检查（S25 手机端）");
+        precheckTitle.setTextColor(0xFFFFFFFF);
+        precheckTitle.setTextSize(17);
+        precheckTitle.setPadding(0, dp(6), 0, dp(4));
+        root.addView(precheckTitle, matchWrap());
+
+        TextView precheckHint = new TextView(this);
+        precheckHint.setText("请在 S25 上手动检查。此应用运行在 S9+，无法远程读取 S25 的 USB 调试开关；勾选代表你已确认，并非系统自动检测结果。");
+        precheckHint.setTextColor(0xFFFFD166);
+        precheckHint.setTextSize(12);
+        root.addView(precheckHint, matchWrap());
+
+        phoneDebugCheck = new CheckBox(this);
+        phoneDebugCheck.setText("S25 已开启 USB 调试");
+        phoneDebugCheck.setTextColor(0xFFFFFFFF);
+        root.addView(phoneDebugCheck, matchWrap());
+
+        phoneUnlockedCheck = new CheckBox(this);
+        phoneUnlockedCheck.setText("S25 已解锁并保持亮屏");
+        phoneUnlockedCheck.setTextColor(0xFFFFFFFF);
+        root.addView(phoneUnlockedCheck, matchWrap());
+
+        Button startSession = new Button(this);
+        startSession.setText("确认前置条件并开始诊断会话");
+        startSession.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { startDiagnosticSession(); }
+        });
+        LinearLayout.LayoutParams sessionParams = matchWrap();
+        sessionParams.topMargin = dp(4);
+        root.addView(startSession, sessionParams);
+
         Button refresh = new Button(this);
         refresh.setText("刷新诊断信息");
         refresh.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View v) { refreshDiagnostics(); }
+            @Override public void onClick(View v) {
+                refreshDiagnostics();
+                logCurrentUsbDiscovery();
+            }
         });
         root.addView(refresh, matchWrap());
 
@@ -219,6 +269,48 @@ public class MainActivity extends Activity {
         diagnostics.setPadding(0, dp(14), 0, dp(14));
         root.addView(diagnostics, matchWrap());
 
+        TextView eventTitle = new TextView(this);
+        eventTitle.setText("【USB/AOA 阶段日志】");
+        eventTitle.setTextColor(0xFFFFFFFF);
+        eventTitle.setTextSize(16);
+        eventTitle.setPadding(0, dp(12), 0, dp(4));
+        root.addView(eventTitle, matchWrap());
+
+        TextView eventHint = new TextView(this);
+        eventHint.setText("记录阶段、USB 权限、AOA 请求结果与身份字段字节长度。不会在导出日志中包含六段序列号或连接码原文。");
+        eventHint.setTextColor(0xFFB7C5D3);
+        eventHint.setTextSize(12);
+        root.addView(eventHint, matchWrap());
+
+        Button exportLog = new Button(this);
+        exportLog.setText("导出/分享脱敏诊断日志");
+        exportLog.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { exportDiagnosticLog(); }
+        });
+        root.addView(exportLog, matchWrap());
+
+        Button clearLog = new Button(this);
+        clearLog.setText("清除本机诊断日志");
+        clearLog.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                new AlertDialog.Builder(MainActivity.this)
+                        .setTitle("清除诊断日志")
+                        .setMessage("这会删除本机保存的阶段日志，且无法撤销。")
+                        .setNegativeButton("取消", null)
+                        .setPositiveButton("清除", (dialog, which) -> clearDiagnosticLog())
+                        .show();
+            }
+        });
+        root.addView(clearLog, matchWrap());
+
+        diagnosticEventLog = new TextView(this);
+        diagnosticEventLog.setTextColor(0xFFE6EDF3);
+        diagnosticEventLog.setTextSize(12);
+        diagnosticEventLog.setTextIsSelectable(true);
+        diagnosticEventLog.setPadding(0, dp(8), 0, dp(14));
+        diagnosticEventLog.setText("尚无阶段日志。先勾选前置条件并开始诊断会话。");
+        root.addView(diagnosticEventLog, matchWrap());
+
         TextView note = new TextView(this);
         note.setText("协议状态：尚未实现。检测到 USB 或 Wi-Fi 并不代表已连接 ICCOA Carlink。");
         note.setTextColor(0xFFFFD166);
@@ -227,6 +319,107 @@ public class MainActivity extends Activity {
         root.addView(note, matchWrap());
     }
 
+
+    private void startDiagnosticSession() {
+        if (phoneDebugCheck == null || phoneUnlockedCheck == null
+                || !phoneDebugCheck.isChecked() || !phoneUnlockedCheck.isChecked()) {
+            recordEvent("PRECHECK_FAILED", "开始诊断失败：用户未确认 S25 已开启 USB 调试且已解锁亮屏。");
+            setUsbStatus("请先勾选 S25 的 USB 调试和解锁亮屏两项，再开始诊断。");
+            return;
+        }
+        diagnosticSessionId = new SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(new Date());
+        diagnosticSessionActive = true;
+        recordEvent("SESSION", "开始诊断会话 session=" + diagnosticSessionId);
+        recordEvent("PRECHECK", "用户手动确认 S25 已开启 USB 调试、已解锁并保持亮屏。S9+ 无法自动读取 S25 的这些状态。");
+        setUsbStatus("诊断会话已开始。先运行普通 USB 打开测试，再按需执行 AOA；AOA 可能导致手机 USB 重新枚举。");
+        logCurrentUsbDiscovery();
+    }
+
+    private boolean ensureDiagnosticPrecheck(String operation) {
+        if (!diagnosticSessionActive) {
+            recordEvent("PRECHECK_BLOCK", operation + " 被阻止：尚未开始诊断会话。");
+            setUsbStatus("请先确认前置条件并开始诊断会话。");
+            return false;
+        }
+        if (phoneDebugCheck == null || phoneUnlockedCheck == null
+                || !phoneDebugCheck.isChecked() || !phoneUnlockedCheck.isChecked()) {
+            diagnosticSessionActive = false;
+            recordEvent("PRECHECK_BLOCK", operation + " 被阻止：前置条件勾选已取消。");
+            setUsbStatus("前置条件未通过：请重新确认 S25 USB 调试和解锁亮屏状态。");
+            return false;
+        }
+        return true;
+    }
+
+    private void loadDiagnosticLog() {
+        String saved = getSharedPreferences(PREFS_DIAGNOSTICS, MODE_PRIVATE).getString(PREF_EVENT_LOG, "");
+        diagnosticLog.setLength(0);
+        if (saved != null) diagnosticLog.append(saved);
+        if (diagnosticEventLog != null) diagnosticEventLog.setText(
+                diagnosticLog.length() == 0 ? "尚无阶段日志。" : diagnosticLog.toString());
+    }
+
+    private void recordEvent(String stage, String message) {
+        String timestamp = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US).format(new Date());
+        diagnosticLog.append(timestamp).append(" [").append(stage).append("] ")
+                .append(message == null ? "" : message.replace('\n', ' ')).append('\n');
+        while (diagnosticLog.length() > 48000) {
+            int cut = diagnosticLog.indexOf("\n", 3000);
+            if (cut < 0) { diagnosticLog.setLength(0); break; }
+            diagnosticLog.delete(0, cut + 1);
+        }
+        getSharedPreferences(PREFS_DIAGNOSTICS, MODE_PRIVATE).edit()
+                .putString(PREF_EVENT_LOG, diagnosticLog.toString()).apply();
+        if (diagnosticEventLog != null) diagnosticEventLog.setText(diagnosticLog.toString());
+    }
+
+    private void logCurrentUsbDiscovery() {
+        Map<String, UsbDevice> devices = usbManager == null ? null : usbManager.getDeviceList();
+        if (devices == null || devices.isEmpty()) {
+            recordEvent("USB_DISCOVERY", "未检测到 USB 设备。");
+            return;
+        }
+        recordEvent("USB_DISCOVERY", "检测到 " + devices.size() + " 个 USB 设备。");
+        for (UsbDevice device : devices.values()) {
+            recordEvent("USB_DEVICE", "VID:PID=" + hex4(device.getVendorId()) + ":" + hex4(device.getProductId())
+                    + "，接口数=" + device.getInterfaceCount()
+                    + "，本应用已获 USB 权限=" + (usbManager.hasPermission(device) ? "是" : "否"));
+        }
+    }
+
+    private void exportDiagnosticLog() {
+        recordEvent("EXPORT", "用户请求导出脱敏阶段日志。");
+        String text = "OpenCarlinkReceiver USB/AOA 诊断日志\n"
+                + "应用版本：0.2.2\n"
+                + "车机设备：" + Build.MANUFACTURER + " " + Build.MODEL
+                + "；Android " + Build.VERSION.RELEASE + "（API " + Build.VERSION.SDK_INT + "）\n"
+                + "当前会话：" + diagnosticSessionId + "\n"
+                + "说明：日志记录人工确认、VID/PID、阶段、返回值和字段字节长度；不主动导出 USB 序列号、六段前导原文或连接码。\n\n"
+                + diagnosticLog.toString();
+        Intent share = new Intent(Intent.ACTION_SEND);
+        share.setType("text/plain");
+        share.putExtra(Intent.EXTRA_SUBJECT, "OpenCarlinkReceiver USB/AOA 诊断日志");
+        share.putExtra(Intent.EXTRA_TEXT, text);
+        try {
+            startActivity(Intent.createChooser(share, "分享诊断日志"));
+        } catch (Exception e) {
+            setUsbStatus("无法打开系统分享界面：" + e.getClass().getSimpleName());
+        }
+    }
+
+    private void clearDiagnosticLog() {
+        diagnosticLog.setLength(0);
+        diagnosticSessionActive = false;
+        diagnosticSessionId = "未开始";
+        getSharedPreferences(PREFS_DIAGNOSTICS, MODE_PRIVATE).edit().remove(PREF_EVENT_LOG).apply();
+        if (diagnosticEventLog != null) diagnosticEventLog.setText("尚无阶段日志。");
+        setUsbStatus("已清除本机保存的诊断日志。重新测试前请开始新会话。");
+    }
+
+    private String summarizeBulkReadResult(String result) {
+        if (result == null) return "AOA Bulk IN 测试无结果文本。";
+        return result.replaceAll("，首批数据 HEX（最多约 512 字节）=.*", "，已省略原始 HEX 样本");
+    }
 
     private EditText addAoaInput(String labelText, String defaultValue) {
         TextView label = new TextView(this);
@@ -247,6 +440,7 @@ public class MainActivity extends Activity {
     }
 
     private void requestUsbPermissionAndTest() {
+        recordEvent("USB_TEST", "用户发起普通 USB open/close 测试，不进行数据传输。");
         if (usbManager == null) {
             setUsbStatus("USB 服务不可用。");
             return;
@@ -278,6 +472,8 @@ public class MainActivity extends Activity {
     }
 
     private void requestUsbPermissionAndStartAoa() {
+        if (!ensureDiagnosticPrecheck("AOA 握手")) return;
+        recordEvent("AOA_NEGOTIATION", "用户发起 AOA 握手。AOA 可能导致手机 USB 重新枚举并使当前 USB/ADB 连接中断。");
         if (usbManager == null) {
             setUsbStatus("USB 服务不可用。");
             return;
@@ -326,6 +522,8 @@ public class MainActivity extends Activity {
     }
 
     private void requestAoaDataPermission() {
+        if (!ensureDiagnosticPrecheck("AOA Bulk IN 只读测试")) return;
+        recordEvent("AOA_BULK_IN", "开始只读 Bulk IN 测试。");
         UsbDevice device = findAoaDevice();
         if (device == null) {
             setUsbStatus("未找到 AOA 配件设备 18D1:2D00。请先连接 S26，必要时执行 AOA 模式切换，再刷新诊断信息。");
@@ -434,6 +632,7 @@ public class MainActivity extends Activity {
                     }
                 }
                 final String finalResult = result;
+                recordEvent("AOA_BULK_IN", summarizeBulkReadResult(finalResult));
                 runOnUiThread(new Runnable() {
                     @Override public void run() {
                         setUsbStatus(finalResult);
@@ -447,6 +646,7 @@ public class MainActivity extends Activity {
     }
 
     private void performAoaHandshake(UsbDevice device) {
+        recordEvent("AOA_NEGOTIATION", "开始握手，候选设备=" + hex4(device.getVendorId()) + ":" + hex4(device.getProductId()));
         UsbDeviceConnection connection = null;
         try {
             connection = usbManager.openDevice(device);
@@ -463,6 +663,7 @@ public class MainActivity extends Activity {
                 return;
             }
             int aoaVersion = (versionBuffer[0] & 0xFF) | ((versionBuffer[1] & 0xFF) << 8);
+            recordEvent("AOA_NEGOTIATION", "请求 51 成功，AOA 协议版本=" + aoaVersion);
             if (aoaVersion < 1 || aoaVersion > 2) {
                 setUsbStatus("AOA 握手停止：返回了无法识别的 AOA 版本 " + aoaVersion + "。未发送切换请求。");
                 return;
@@ -496,14 +697,18 @@ public class MainActivity extends Activity {
                         UsbConstants.USB_DIR_OUT | UsbConstants.USB_TYPE_VENDOR,
                         52, 0, i, value, value.length, 2000);
                 if (sent != value.length) {
+                    recordEvent("AOA_IDENTITY", "字段 index=" + i + " 发送失败：返回=" + sent + "，预期=" + value.length + " 字节；字段原文未记录。");
                     setUsbStatus("AOA 握手中止：AOA 版本 " + aoaVersion + "，发送身份字符串 index=" + i
                             + " 失败（返回 " + sent + "，预期 " + value.length + "）。未请求切换模式。");
                     return;
                 }
+                recordEvent("AOA_IDENTITY", "字段 index=" + i + " 发送成功，UTF-8 字节数=" + value.length + "；字段原文未记录。");
             }
             int startResult = connection.controlTransfer(
                     UsbConstants.USB_DIR_OUT | UsbConstants.USB_TYPE_VENDOR,
                     53, 0, 0, null, 0, 2000);
+            recordEvent("AOA_NEGOTIATION", "请求 53 START_ACCESSORY_MODE 返回值=" + startResult
+                    + (startResult < 0 ? "（失败）" : "（USB 层已接受请求；尚不能证明重新枚举或 ICCOA 认证成功）"));
             if (startResult < 0) {
                 setUsbStatus("AOA 版本 " + aoaVersion + "：身份字符串已发送，但 START_ACCESSORY_MODE 请求失败（" + startResult + "）。请刷新诊断信息。");
             } else {
@@ -620,6 +825,10 @@ public class MainActivity extends Activity {
     }
 
     private void setUsbStatus(String message) {
+        if (message != null) {
+            String stage = message.toLowerCase(Locale.ROOT).contains("aoa") ? "AOA_STATUS" : "USB_STATUS";
+            recordEvent(stage, message);
+        }
         if (usbTestStatus != null) usbTestStatus.setText("USB 连接测试：" + message);
     }
 
