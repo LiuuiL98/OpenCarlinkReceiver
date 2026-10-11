@@ -641,3 +641,17 @@ The enum initializer contains port constants, but this pass has not yet safely m
 2. Decode enum initializer register/constant operands and `getPort()` field assignment to map each channel name to its numeric port.
 3. Trace `UCarAuthService` and `CarCertManager` construction to identify which channel types are instantiated first and whether auth/certificate setup has a strict order.
 4. Finish branch-level review of `fillBuffer` and `SocketChannelReadTask.run()` for EOF, zero-byte reads, and declared-length validation before allocation.
+
+
+## 22. CRC helper loop: bounds checks confirmed, algorithm parameters still open
+
+The DEX body of both overloads of `Crc16.checksum` was inspected:
+
+- `checksum(ByteBuffer, int, int)` checks for a null buffer, negative start/length values, and a requested range that exceeds `ByteBuffer.remaining()`. It reads bytes with `ByteBuffer.get(index)` inside a loop.
+- `checksum(byte[], int, int)` performs the corresponding null, negative-range, and array-bound checks, then reads the byte array inside a loop.
+- Invalid ranges reach `ArrayIndexOutOfBoundsException`; a null input reaches `NullPointerException`.
+- Both overloads have a loop with byte-level arithmetic/table-index operations and return a 16-bit result.
+
+This establishes that the helper processes a bounded range and that the ByteBuffer overload's indexes are relative to the buffer's current remaining range as checked by the implementation. It does **not** yet establish the CRC-16 variant: the polynomial, initial value, reflection settings, final XOR, and table contents have not been reconstructed in this pass. Do not substitute a generic CRC-16 implementation until those values are recovered or verified against known official frames.
+
+The enum initializer also visibly contains the numeric constants `4321`, `7236`, and `15550` alongside the `UIBC`, `RTSP`, and `RTP` construction sequences, respectively. Treat these as strong sequence-level evidence, but finish decoding the register/field assignments before treating them as a tested port map. The other channel ports remain unresolved.
