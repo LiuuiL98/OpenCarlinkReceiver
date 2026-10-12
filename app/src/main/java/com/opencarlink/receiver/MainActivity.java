@@ -91,7 +91,7 @@ public class MainActivity extends Activity {
                 refreshDiagnostics();
                 return;
             }
-            if (!ACTION_USB_PERMISSION.equals(action) && !ACTION_AOA_PERMISSION.equals(action) && !ACTION_AOA_DATA_PERMISSION.equals(action) && !ACTION_AOA_FRAME_PERMISSION.equals(action)) return;
+            if (!ACTION_USB_PERMISSION.equals(action) && !ACTION_AOA_PERMISSION.equals(action) && !ACTION_AOA_DATA_PERMISSION.equals(action) && !ACTION_AOA_FRAME_PERMISSION.equals(action) && !ACTION_AOA_SOCKET_PROBE_PERMISSION.equals(action)) return;
             boolean aoaRequest = ACTION_AOA_PERMISSION.equals(action);
             UsbDevice device = intent.getParcelableExtra(UsbManager.EXTRA_DEVICE);
             boolean granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false);
