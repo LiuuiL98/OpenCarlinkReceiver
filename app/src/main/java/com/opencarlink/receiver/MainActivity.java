@@ -41,12 +41,21 @@ import java.io.FileOutputStream;
 import java.util.Date;
 import java.util.Locale;
 import java.util.Map;
+import java.net.ServerSocket;
+import java.net.Socket;
+import java.net.SocketTimeoutException;
+import java.net.InetSocketAddress;
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public class MainActivity extends Activity {
     private static final String ACTION_USB_PERMISSION = "com.opencarlink.receiver.USB_PERMISSION";
     private static final String ACTION_AOA_PERMISSION = "com.opencarlink.receiver.AOA_PERMISSION";
     private static final String ACTION_AOA_DATA_PERMISSION = "com.opencarlink.receiver.AOA_DATA_PERMISSION";
     private static final String ACTION_AOA_FRAME_PERMISSION = "com.opencarlink.receiver.AOA_FRAME_PERMISSION";
+    private static final String ACTION_AOA_SOCKET_PROBE_PERMISSION = "com.opencarlink.receiver.AOA_SOCKET_PROBE_PERMISSION";
     private static final int AOA_VENDOR_ID = 0x18D1;
     private static final int AOA_PRODUCT_ID = 0x2D00;
     private LinearLayout root;
@@ -95,6 +104,9 @@ public class MainActivity extends Activity {
             } else if (ACTION_AOA_FRAME_PERMISSION.equals(action)) {
                 setUsbStatus("已获得 AOA 设备 USB 权限，正在按 AOA 记录格式进行只读解析……");
                 testAoaFramedRead(device);
+            } else if (ACTION_AOA_SOCKET_PROBE_PERMISSION.equals(action)) {
+                setUsbStatus("已获得 AOA 设备 USB 权限，启动实验性套接字生命周期验证……");
+                testAoaSocketLifecycleProbe(device);
             } else if (ACTION_AOA_DATA_PERMISSION.equals(action)) {
                 setUsbStatus("已获得 AOA 设备 USB 权限，正在进行原始 Bulk IN 抓包……");
                 testAoaBulkRead(device);
@@ -124,6 +136,7 @@ public class MainActivity extends Activity {
         filter.addAction(ACTION_AOA_PERMISSION);
         filter.addAction(ACTION_AOA_DATA_PERMISSION);
         filter.addAction(ACTION_AOA_FRAME_PERMISSION);
+        filter.addAction(ACTION_AOA_SOCKET_PROBE_PERMISSION);
         filter.addAction(UsbManager.ACTION_USB_DEVICE_ATTACHED);
         filter.addAction(UsbManager.ACTION_USB_DEVICE_DETACHED);
         if (Build.VERSION.SDK_INT >= 33) {
@@ -160,7 +173,7 @@ public class MainActivity extends Activity {
         root.addView(title, matchWrap());
 
         TextView subtitle = new TextView(this);
-        subtitle.setText("车机兼容性诊断工具 · 版本 0.2.5");
+        subtitle.setText("车机兼容性诊断工具 · 版本 0.2.6-dev.1");
         subtitle.setTextColor(0xFFB7C5D3);
         subtitle.setTextSize(13);
         subtitle.setPadding(0, dp(6), 0, dp(18));
@@ -286,6 +299,21 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams rawAoaReadParams = matchWrap();
         rawAoaReadParams.topMargin = dp(4);
         root.addView(rawAoaReadButton, rawAoaReadParams);
+
+        Button socketProbeButton = new Button(this);
+        socketProbeButton.setText("实验性：验证 RTSP/UIBC 套接字生命周期");
+        socketProbeButton.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { confirmAoaSocketLifecycleProbe(); }
+        });
+        LinearLayout.LayoutParams socketProbeParams = matchWrap();
+        socketProbeParams.topMargin = dp(8);
+        root.addView(socketProbeButton, socketProbeParams);
+
+        TextView socketProbeHint = new TextView(this);
+        socketProbeHint.setText("实验模式：只处理已观察到的 7236/4321 创建请求；尝试绑定本地监听端口。客户端接入后发送一条 18 字节 AOA 创建套接字控制记录，用于验证通道分配假设。不转发视频/音频/认证数据，测试结束会关闭套接字。");
+        socketProbeHint.setTextColor(0xFFFFD166);
+        socketProbeHint.setTextSize(12);
+        root.addView(socketProbeHint, matchWrap());
 
         TextView aoaWarning = new TextView(this);
         aoaWarning.setText("注意：AOA 会向连接的 Android 设备发送标准 USB 控制请求，并可能导致对端 USB 重新枚举、断开当前调试连接。仅在你明确要测试时点击；此功能不发送 ICCOA 业务数据。");
@@ -695,6 +723,233 @@ public class MainActivity extends Activity {
         } catch (Exception e) {
             setUsbStatus("申请 AOA 配件权限失败：" + e.getClass().getSimpleName() + "：" + safeMessage(e));
         }
+    }
+
+    private void confirmAoaSocketLifecycleProbe() {
+        if (!ensureDiagnosticPrecheck("实验性 RTSP/UIBC 套接字生命周期验证")) return;
+        new AlertDialog.Builder(this)
+                .setTitle("启动实验性通道验证？")
+                .setMessage("该测试会读取 AOA 创建套接字请求，并仅对端口 7236（RTSP）和 4321（UIBC）尝试建立本地监听。客户端接入后会向 USB OUT 发送一条 18 字节的候选通道响应（socketType 3/4，messageType 2）。不会发送认证载荷或转发媒体数据，但可能改变 S25 当前连接状态。测试最长约 35 秒，结束后关闭套接字。")
+                .setNegativeButton("取消", null)
+                .setPositiveButton("继续测试", (dialog, which) -> requestAoaSocketProbePermission())
+                .show();
+    }
+
+    private void requestAoaSocketProbePermission() {
+        UsbDevice device = findAoaDevice();
+        if (device == null) {
+            setUsbStatus("未找到 AOA 配件设备。请先执行 AOA 模式切换并刷新设备。");
+            return;
+        }
+        if (usbManager.hasPermission(device)) {
+            testAoaSocketLifecycleProbe(device);
+            return;
+        }
+        try {
+            Intent intent = new Intent(ACTION_AOA_SOCKET_PROBE_PERMISSION);
+            intent.setPackage(getPackageName());
+            int flags = PendingIntent.FLAG_UPDATE_CURRENT;
+            if (Build.VERSION.SDK_INT >= 31) flags |= PendingIntent.FLAG_MUTABLE;
+            PendingIntent permissionIntent = PendingIntent.getBroadcast(this, 4, intent, flags);
+            usbManager.requestPermission(device, permissionIntent);
+            setUsbStatus("正在申请 AOA 配件 USB 权限；授权后会启动实验性套接字生命周期验证。");
+        } catch (Exception e) {
+            setUsbStatus("申请实验模式 USB 权限失败：" + e.getClass().getSimpleName() + "：" + safeMessage(e));
+        }
+    }
+
+    /**
+     * Experimental probe based on observed RTSP/UIBC requests. It does not
+     * implement media forwarding or authentication.
+     */
+    private void testAoaSocketLifecycleProbe(final UsbDevice device) {
+        Thread worker = new Thread(new Runnable() {
+            @Override public void run() {
+                UsbDeviceConnection connection = null;
+                UsbInterface claimedInterface = null;
+                String result;
+                List<ServerSocket> servers = new ArrayList<ServerSocket>();
+                List<Socket> clients = new ArrayList<Socket>();
+                AtomicInteger nextChannelId = new AtomicInteger(16);
+                AtomicInteger accepts = new AtomicInteger(0);
+                AtomicInteger writes = new AtomicInteger(0);
+                try {
+                    if (device.getVendorId() != AOA_VENDOR_ID || !isAoaAccessoryProductId(device.getProductId())) {
+                        result = "实验模式取消：设备 VID/PID 已变化，请重新刷新。";
+                    } else {
+                        connection = usbManager.openDevice(device);
+                        if (connection == null) {
+                            result = "实验模式失败：openDevice() 返回空。";
+                        } else {
+                            UsbEndpoint inEndpoint = null;
+                            UsbEndpoint outEndpoint = null;
+                            for (int i = 0; i < device.getInterfaceCount(); i++) {
+                                UsbInterface candidate = device.getInterface(i);
+                                UsbEndpoint candidateIn = null;
+                                UsbEndpoint candidateOut = null;
+                                for (int j = 0; j < candidate.getEndpointCount(); j++) {
+                                    UsbEndpoint endpoint = candidate.getEndpoint(j);
+                                    if (endpoint.getType() != UsbConstants.USB_ENDPOINT_XFER_BULK) continue;
+                                    if (endpoint.getDirection() == UsbConstants.USB_DIR_IN) candidateIn = endpoint;
+                                    if (endpoint.getDirection() == UsbConstants.USB_DIR_OUT) candidateOut = endpoint;
+                                }
+                                if (candidateIn != null && candidateOut != null) {
+                                    claimedInterface = candidate;
+                                    inEndpoint = candidateIn;
+                                    outEndpoint = candidateOut;
+                                    break;
+                                }
+                            }
+                            if (inEndpoint == null || outEndpoint == null || claimedInterface == null) {
+                                result = "实验模式失败：未找到同时具有 Bulk IN/OUT 的 USB 接口。";
+                            } else if (!connection.claimInterface(claimedInterface, true)) {
+                                result = "实验模式失败：claimInterface() 未能声明接口。";
+                            } else {
+                                final UsbEndpoint responseEndpoint = outEndpoint;
+                                final UsbDeviceConnection activeConnection = connection;
+                                final Object writeLock = new Object();
+                                AoaUsbExactLengthSource source = new AoaUsbExactLengthSource(connection, inEndpoint, 500);
+                                long started = android.os.SystemClock.elapsedRealtime();
+                                int records = 0;
+                                int listenerBinds = 0;
+                                ServerSocket rtspServer = null;
+                                ServerSocket uibcServer = null;
+                                appendTraceLine("AOA_SOCKET_PROBE_START vid=" + hex4(device.getVendorId())
+                                        + " pid=" + hex4(device.getProductId())
+                                        + " interface=" + claimedInterface.getId()
+                                        + " in_endpoint=" + hex2(inEndpoint.getAddress())
+                                        + " out_endpoint=" + hex2(outEndpoint.getAddress())
+                                        + " duration_cap_ms=35000 response_write=enabled media_forwarding=disabled auth_payload=disabled");
+
+                                while (android.os.SystemClock.elapsedRealtime() - started < 35000 && records < 20) {
+                                    AoaRecordReader.Record record = AoaRecordReader.readOne(source, 1024 * 1024);
+                                    if (record == null) continue;
+                                    records++;
+                                    if (record.createSocket == null) {
+                                        appendTraceLine("AOA_SOCKET_PROBE_RECORD ignored channel_id=" + record.header.channelId
+                                                + " body_length=" + record.logicalBodyLength + " reason=not_create_socket");
+                                        continue;
+                                    }
+                                    com.opencarlink.receiver.protocol.AoaCreateSocketRecord request = record.createSocket;
+                                    appendTraceLine("AOA_SOCKET_REQUEST port=" + request.port
+                                            + " requested_channel_id=" + request.channelId
+                                            + " socket_type=" + request.socketType
+                                            + " message_type=" + request.channelMessageType
+                                            + " outer_channel_id=" + record.header.channelId);
+
+                                    if (record.header.channelId != 1 || request.channelId != -1
+                                            || !request.requestsServerSocket()
+                                            || (request.port != 7236 && request.port != 4321)) {
+                                        appendTraceLine("AOA_SOCKET_REQUEST_IGNORED reason=outside_confirmed_probe_scope");
+                                        continue;
+                                    }
+
+                                    ServerSocket server = request.port == 7236 ? rtspServer : uibcServer;
+                                    if (server != null) {
+                                        appendTraceLine("TCP_LISTENER_DUPLICATE port=" + request.port + " ignored=true");
+                                        continue;
+                                    }
+                                    try {
+                                        server = new ServerSocket();
+                                        server.setReuseAddress(false);
+                                        server.bind(new InetSocketAddress(request.port));
+                                        server.setSoTimeout(25000);
+                                        servers.add(server);
+                                        if (request.port == 7236) rtspServer = server; else uibcServer = server;
+                                        listenerBinds++;
+                                        appendTraceLine("TCP_LISTENER_BIND port=" + request.port + " success=true timeout_ms=25000");
+                                    } catch (Exception bindError) {
+                                        if (server != null) try { server.close(); } catch (Exception ignored) { }
+                                        appendTraceLine("TCP_LISTENER_BIND port=" + request.port + " success=false error="
+                                                + bindError.getClass().getSimpleName() + " message=" + safeMessage(bindError));
+                                        continue;
+                                    }
+
+                                    final ServerSocket acceptServer = server;
+                                    final int requestedPort = request.port;
+                                    final int candidateSocketType = requestedPort == 7236
+                                            ? com.opencarlink.receiver.protocol.AoaCreateSocketFrameEncoder.SOCKET_TYPE_RTSP
+                                            : com.opencarlink.receiver.protocol.AoaCreateSocketFrameEncoder.SOCKET_TYPE_UIBC;
+                                    Thread acceptWorker = new Thread(new Runnable() {
+                                        @Override public void run() {
+                                            Socket client = null;
+                                            try {
+                                                client = acceptServer.accept();
+                                                synchronized (clients) { clients.add(client); }
+                                                final int assignedChannelId = nextChannelId.getAndIncrement();
+                                                accepts.incrementAndGet();
+                                                appendTraceLine("TCP_ACCEPT port=" + requestedPort
+                                                        + " success=true assigned_channel_id=" + assignedChannelId);
+                                                byte[] frame = com.opencarlink.receiver.protocol.AoaCreateSocketFrameEncoder.encode(
+                                                        requestedPort, assignedChannelId, candidateSocketType, 2);
+                                                int sent;
+                                                synchronized (writeLock) {
+                                                    sent = activeConnection.bulkTransfer(responseEndpoint, frame, frame.length, 1000);
+                                                }
+                                                boolean sentOk = sent == frame.length;
+                                                if (sentOk) writes.incrementAndGet();
+                                                appendTraceLine("AOA_SOCKET_RESPONSE_WRITE port=" + requestedPort
+                                                        + " assigned_channel_id=" + assignedChannelId
+                                                        + " socket_type=" + candidateSocketType
+                                                        + " candidate_message_type=2 expected_bytes=" + frame.length
+                                                        + " actual_bytes=" + sent + " success=" + sentOk);
+                                                Thread.sleep(5000);
+                                            } catch (SocketTimeoutException timeout) {
+                                                appendTraceLine("TCP_ACCEPT port=" + requestedPort + " success=false result=timeout");
+                                            } catch (Exception acceptError) {
+                                                appendTraceLine("TCP_ACCEPT port=" + requestedPort + " success=false error="
+                                                        + acceptError.getClass().getSimpleName() + " message=" + safeMessage(acceptError));
+                                            } finally {
+                                                if (client != null) {
+                                                    synchronized (clients) { clients.remove(client); }
+                                                    try { client.close(); } catch (Exception ignored) { }
+                                                }
+                                            }
+                                        }
+                                    }, "AOA-TCP-Accept-" + request.port);
+                                    acceptWorker.setDaemon(true);
+                                    acceptWorker.start();
+                                }
+                                appendTraceLine("AOA_SOCKET_PROBE_END records=" + records
+                                        + " listener_binds=" + listenerBinds
+                                        + " accepts=" + accepts.get() + " response_writes=" + writes.get()
+                                        + " elapsed_ms=" + (android.os.SystemClock.elapsedRealtime() - started)
+                                        + " media_forwarding=disabled auth_payload=disabled");
+                                result = "实验性套接字验证结束。收到记录=" + records + "，监听绑定=" + listenerBinds
+                                        + "，accept=" + accepts.get() + "，控制记录写入成功=" + writes.get()
+                                        + "。未转发媒体或认证数据；详情见导出的通信追踪日志。";
+                            }
+                        }
+                    }
+                } catch (Exception e) {
+                    appendTraceLine("AOA_SOCKET_PROBE_ERROR type=" + e.getClass().getSimpleName()
+                            + " message=" + safeMessage(e));
+                    result = "实验模式异常：" + e.getClass().getSimpleName() + "：" + safeMessage(e);
+                } finally {
+                    synchronized (clients) {
+                        for (Socket client : clients) try { client.close(); } catch (Exception ignored) { }
+                        clients.clear();
+                    }
+                    for (ServerSocket server : servers) try { server.close(); } catch (Exception ignored) { }
+                    if (connection != null) {
+                        if (claimedInterface != null) {
+                            try { connection.releaseInterface(claimedInterface); } catch (Exception ignored) { }
+                        }
+                        try { connection.close(); } catch (Exception ignored) { }
+                    }
+                }
+                final String finalResult = result;
+                runOnUiThread(new Runnable() {
+                    @Override public void run() {
+                        recordEvent("AOA_SOCKET_PROBE", summarizeBulkReadResult(finalResult));
+                        setUsbStatus(finalResult);
+                        refreshDiagnostics();
+                    }
+                });
+            }
+        }, "AOA-SocketLifecycle-Probe");
+        worker.setDaemon(true);
+        worker.start();
     }
 
     /**
