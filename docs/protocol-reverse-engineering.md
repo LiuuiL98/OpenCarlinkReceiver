@@ -93,6 +93,39 @@ Previous static observations:
 
 These candidate ports (57209, 57219, 57229, 57249) are distinct from the captured create-socket record values 7236 and 4321. Do not assume they refer to the same namespace or stage.
 
+## Authentication call path recovered from DEX instructions
+
+This section is based on method-level inspection of `classes2.dex`, not just string-pool matches.
+
+### Message construction
+
+`UCarAuthProtocol` builds three authentication message types in category `AUTH`:
+
+| Operation | Message type | Method index | Protobuf body |
+|---|---|---:|---|
+| Client key negotiation request | `REQ` | 1 | `UCarProto.AuthRequest` |
+| Server key negotiation response | `RES` | 2 | `UCarProto.AuthResponse` |
+| Session-key confirmation | `SEND` | 3 | `UCarProto.AuthConfirm` |
+
+The request/response parsers validate the message category/type before parsing the body as the corresponding Protobuf message. `UCarAuthProtocol.init()` registers the AUTH method-index names. Certificate messages are handled by a separate `UCarCertProtocol` in category `CERT`, with its create-message path using method index 1.
+
+### Client-side sequence
+
+The recovered call path in `com.share.connect.security.CarAuthClient` and `ClientKeyNegotiator` is:
+
+1. `CarAuthClient` creates an auth channel using `ChannelType.AUTH` and retains a `ClientKeyNegotiator` and `SecurityManager`.
+2. `CarAuthClient.start()` starts the auth channel if it is not already connected.
+3. `agreeOnSecurityKeys(...)` asks `ClientKeyNegotiator.generateKeyNegotiationInfo(...)` to create an `AuthRequest`, wraps it using `createAuthRequestMessage`, and sends it with `SocketChannel.request(...)`.
+4. The response callback converts the reply through `parseAuthResponseMessage`, reads the response's version/work-mode fields, and calls `ClientKeyNegotiator.agreeOnSessionKey(...)`.
+5. The negotiator parses server information including authentication public key, authentication-key HMAC, agreement public key/signature, nonce, result, and server ID. The method references key lookup, peer authentication/agreement-key verification, ECDH-style agreement-key generation, session-key agreement, and peer-record persistence. Failure branches include malformed server response, server error, work-mode negotiation failure, and session-key agreement/persistence failure.
+6. `confirmSessionKey(...)` formats a session confirmation string, UTF-8 encodes and encrypts it through `SecurityManager.encrypt(...)`, places the ciphertext in `UCarProto.AuthConfirm.cipher`, and sends an AUTH `SEND` message through the auth channel.
+
+These observations establish the shape of the official authentication flow; they do **not** provide a valid real-car identity, PIN, key, certificate, or successful peer transcript. Do not log or commit PINs, AOA identity fields, key material, nonces, or authentication payloads from real sessions.
+
+### Relation to the captured AOA records
+
+The static AOA handler maps the record's first 32-bit field through `ChannelType.fromPort(port)` and then creates/starts per-channel read handling. The two captured ports are RTSP and UIBC, while the authentication client separately selects `ChannelType.AUTH` (port 57209) and is passed the loopback address `127.0.0.1` by the readiness path. This means the captured 7236/4321 records should not be mistaken for the AUTH TCP endpoint. The exact cross-process socket ownership and how the readiness condition is satisfied still require dynamic correlation.
+
 ## Implementation plan
 
 1. Preserve the hardware records as regression fixtures and decode outer framing without active behavior.
