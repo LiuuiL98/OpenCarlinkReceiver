@@ -46,6 +46,12 @@ The log does **not** prove that the receiver should connect to either port. No s
 
 The 10-second capture still produced only these two records, with repeated 500 ms idle intervals. This shows no additional readable record arrived at the selected Bulk IN endpoint during that capture window; it does not prove that no later message exists or that authentication was attempted.
 
+## Sender-side Android activity evidence
+
+The previously collected S25 system log contains an accessory-attach launch of `com.samsung.android.carlink/.connection.iccoa.IccoaUsbConnectionActivity` at 2026-10-12 00:11:29.711. The activity was requested/resumed, then the system logged `wm_finish_activity` at 00:11:29.731 and destruction at 00:11:29.745. This is evidence that the phone's AOA accessory matching reached the Samsung ICCOA USB activity, but the activity ended almost immediately. It is **not** evidence of successful ICCOA authentication or a live Carlink session.
+
+This phone-side observation narrows the next investigation: prioritize the official activity's early-exit conditions and the receiver-side create-socket record handler, while keeping the test placeholder identity values clearly distinguished from a real certified head unit. Do not infer the exact exit reason from ActivityManager lifecycle lines alone; correlate with app-specific logs and the official APK call graph.
+
 ## Official APK classes to trace
 
 The following names were identified during prior static analysis and are the next code-path anchors:
