@@ -98,8 +98,9 @@ The following names were identified during prior static analysis and are the nex
 Previous static observations:
 
 - `MessageHeader` rejects inputs shorter than 20 bytes.
-- A CRC value is read at offset 18 and a mismatch raises a protocol exception. The full CRC coverage, byte order, initial value, final XOR, and message-length relationship still need confirmation.
-- The CRC lookup table begins `0000 C0C1 C181 0140 C301 03C0 ...`, consistent with a reflected 0xA001-family implementation; do not finalize a named CRC variant from this prefix alone.
+- The parser reads a 16-bit checksum at byte offset 18 and compares it with `Crc16.checksum(rawBytes, 0, 18)`; therefore the checksum covers exactly header bytes 0..17, excluding the checksum field itself. A mismatch raises a protocol exception.
+- `ByteUtil` reads and writes multi-byte integers/shorts in big-endian order. The checksum field is consequently serialized big-endian by the byte-array path.
+- `Crc16` initializes its CRC accumulator to zero and uses a reflected lookup table beginning `0000 C0C1 C181 0140 C301 03C0 ...`, consistent with the CRC-16/ARC (reflected 0xA001 polynomial, init 0, xorout 0) family. Treat CRC-16/ARC as the best-supported identification, and still add a known-good official header vector to confirm the implementation end-to-end before using it to accept live messages.
 - Candidate channel/port constants previously identified: AUTH 57209, CONTROL 57219, MEDIA 57229, CERT 57249. Treat these as static-analysis candidates until their use sites and actual socket endpoints are traced.
 - Prior analysis indicated `UCarAdapter.startUCarChannel` starts Control/Sensor/CarCert/audio components, while `ShareLinkService` independently starts `UCarAuthService`. Confirm the exact sequence and prerequisites from the official call graph.
 
