@@ -339,3 +339,32 @@ The two socket mechanisms can now be placed side-by-side without claiming an uno
 4. If no AUTH AOA record arrives, inspect the peer-side control path and the readiness gate rather than fabricating a record or manually opening the socket.
 
 Until these observations exist, keep the bridge as a hypothesis and keep active AUTH transport disabled in the receiver.
+
+
+## Real-device trace: Galaxy S25 → Galaxy S9+ (2026-10-12)
+
+Device pair: Samsung Galaxy S25 (Android 16 / One UI 8.5, sender) → Samsung Galaxy S9+ SM-G9650 (Android 10 / API 29, receiver running OpenCarlinkReceiver 0.2.5). The user-provided trace is from a real USB session on 2026-10-12. Identity strings and PIN values are intentionally not repeated here.
+
+### Confirmed observations
+
+1. Before AOA, the S9+ sees USB VID:PID `04E8:6860`. Standard AOA request 51 succeeds and reports protocol version 2. All six identity-field control transfers report success; request 53 (START_ACCESSORY_MODE) returns 0.
+2. The device detaches as `04E8:6860` and reattaches as `18D1:2D01`, with two interfaces. This confirms AOA accessory-mode re-enumeration at the USB layer. It does **not** prove that the sender accepted the ICCOA identity or completed ICCOA authentication; the identity contains placeholder test values.
+3. A read-only framed read on interface 0 / endpoint `0x81` captured exactly two records, both outer channel ID 1, each with a declared 10-byte body:
+   - `00 00 1C 44 FF FF FF FF 01 02` → port 7236, requested channel ID -1, socket type 1, channel-message type 2.
+   - `00 00 10 E1 FF FF FF FF 01 02` → port 4321, requested channel ID -1, socket type 1, channel-message type 2.
+4. These map to the previously reverse-engineered RTSP (7236) and UIBC (4321) default socket requests. In the official implementation, incoming socket type 1 follows the server-listener path. The sentinel channel ID -1 is not by itself an error.
+5. The framed reader then idled for about 10 seconds. A separate raw Bulk IN run performed afterward read 0 bytes over about 5 seconds (10 no-data/timeout returns, 0 other errors). This is consistent with an idle endpoint during that later window; it does not establish why the protocol stopped producing records, and the two runs must not be treated as one continuous capture.
+
+### What remains unproven
+
+- Whether the receiver creates local TCP listeners for 7236 and 4321.
+- Whether any local client connects and is accepted, whether the receiver assigns a positive channel ID, and whether it sends the corresponding AOA response/control record.
+- Whether the default-channel readiness gate is satisfied.
+- Whether an AUTH AOA record or local bridge to `127.0.0.1:57209` exists, whether an AuthRequest is sent, or whether key confirmation succeeds.
+- Whether RTSP negotiation or video/audio data begins.
+
+### Next diagnostic step
+
+Add a separately gated **socket lifecycle probe**, not an automatic protocol implementation. It should correlate monotonic timestamps for each received create-socket request with: listener bind success/failure, local client accept, assigned channel ID, outgoing AOA control-record metadata, default-channel readiness, AUTH listener bind/accept, and high-level auth/display state transitions. For each event, log only port, channel ID, socket/message type, elapsed time, result boolean, and redacted exception class/message. Never log raw AOA identity strings, USB PIN, certificate contents, key material, nonces, or authentication payloads.
+
+Keep the probe opt-in and avoid creating listeners or writing AOA records during the existing read-only test. Validate framing and metadata parsing with unit tests first; then run a distinct hardware session. Do not synthesize an AUTH record or claim authentication/video success from the current trace.
