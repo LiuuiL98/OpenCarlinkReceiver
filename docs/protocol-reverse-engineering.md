@@ -112,6 +112,34 @@ This narrows the interpretation of the captured records: `channelMessageType=2` 
 
 The 10-second capture still produced only these two records, with repeated 500 ms idle intervals. This shows no additional readable record arrived at the selected Bulk IN endpoint during that capture window; it does not prove that no later message exists or that authentication was attempted.
 
+
+## Call-chain trace: create-socket request to authentication startup (static DEX trace, 2026-10-12)
+
+This section records the call path reconstructed from the official APK's `classes2.dex` instruction stream. Class names such as `LK6/d` are obfuscated; the conclusions below are tied to observed invokes, fields, strings, and branch structure rather than names alone.
+
+### 1. Incoming create-socket record: `LK6/d.a(byte[], int)`
+
+1. The method decodes the record's port, channel ID, socket type, and channel-message type, then logs `received create socket msg, port ...`.
+2. The `socketType == 1` branch is the local-server path. It expects `channelId == -1`; a mismatch is logged. It resolves the channel enum with `ChannelType.fromPort(port)`, constructs `LK6/f(port, channelId, channelType.name())`, starts that thread, and stores it in a `SparseArray` keyed by port. A construction/start failure is caught and logged as `Start ServerSocketRead Thread Fail`.
+3. The non-server branch validates the channel ID and message-type range before constructing `LK6/h`, starts the client socket read thread, and stores it in the same port-keyed collection. Invalid values are logged (`invalid channel id` / `invalid msg type`); failures are logged as `Start ClientSocketRead Thread Fail`.
+4. After adding a thread, the handler walks the registered read-thread collection and checks for missing/null entries. Only the readiness branch logs `all needed default socket ready`. This is a collection/read-thread readiness gate, not proof that the phone has authenticated or that video is flowing.
+5. On that readiness path, the code logs the `ShareLink` network-ready state, updates the `usb_connected` preference/state, constructs the `ShareLinkService` callback helper with `127.0.0.1`, creates `CarAuthClient`, and invokes `CarAuthClient.start()`. A boolean field guards part of this initialization path; its exact lifecycle across reconnects still needs to be checked before reproducing it.
+
+**Important interpretation:** the two observed records (`RTSP=7236` and `UIBC=4321`, both `socketType=1`) enter the server-listener branch. The diagnostic app has not accepted TCP clients or reached this readiness/authentication path, so these are static call-path findings, not a claim of successful live session establishment.
+
+### 2. Local TCP client accepted: `LK6/f.f()`
+
+1. The thread calls `ServerSocket.accept()` and logs either `One client connected in ...` or `One client connected fail: ...`.
+2. For an accepted socket, it enables `TCP_NODELAY` and sets send/receive buffer sizes.
+3. It maps the listening port back to `ChannelType`, obtains a channel ID using a shared `AtomicInteger.getAndIncrement()` (static initialization starts at 16), chooses the outgoing `socketType` using the enum switch, and calls `LK6/d.d(port, channelId, socketType, channelMsgType)` to emit the 10-byte create-socket body over AOA.
+4. It assigns the allocated ID to the associated `LK6/h` thread and starts/updates that thread's forwarding path. The exact phone-side reaction to this outgoing record remains unverified until a bidirectional hardware capture is available.
+
+### 3. What this trace proves—and what it does not
+
+- **Proven by static DEX flow:** create-socket records register per-port threads; server requests use `ServerSocket`; the readiness branch is followed by `CarAuthClient.start()`; accepted local TCP clients trigger an outgoing create-socket record and channel-ID assignment.
+- **Not yet proven:** the S25 accepts our test accessory identity as a valid ICCOA head unit; either local TCP listener receives a client; the readiness gate is reached in the captured session; authentication succeeds; or a phone-side channel ID exactly matches the inferred outgoing assignment.
+- **Next validation:** collect a time-correlated, redacted trace showing incoming AOA records, local listener accept/connect events, outgoing AOA record metadata (port/channel ID/socket type/message type only), and authentication stage/result logs. Do not capture or publish raw serial/PIN values, keys, nonces, certificates, or authentication payloads. Keep the receiver in read-only mode until the sequence is confirmed.
+
 ## Sender-side Android activity evidence
 
 The previously collected S25 system log contains an accessory-attach launch of `com.samsung.android.carlink/.connection.iccoa.IccoaUsbConnectionActivity` at 2026-10-12 00:11:29.711. The activity was requested/resumed, then the system logged `wm_finish_activity` at 00:11:29.731 and destruction at 00:11:29.745. This is evidence that the phone's AOA accessory matching reached the Samsung ICCOA USB activity, but the activity ended almost immediately. It is **not** evidence of successful ICCOA authentication or a live Carlink session.
