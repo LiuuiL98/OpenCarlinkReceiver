@@ -264,3 +264,34 @@ The static AOA handler maps the record's first 32-bit field through `ChannelType
 - Keep raw observations, decoder output, and semantic interpretation as separate log fields.
 - Every new parser behavior should have deterministic unit tests; every active transport step should be separately opt-in and report success only when the peer confirms it.
 - The Android USB adapter and hardware session require real-device validation; CI cannot simulate USB enumeration or phone-side protocol behavior.
+
+
+## Post-authentication callback and remote-display boundary (static DEX trace, 2026-10-12)
+
+The next call-site pass clarifies the boundary between authentication and the display startup path. This is still a static trace of the official APK; it does not imply that our test receiver has completed authentication.
+
+### Authentication result handling
+
+- `com.ucarmd.f.onResult(CarAuthClient, ClientKeyNegotiator.Result, int)` treats `OK` specially: it logs `key agreement OK` and calls `CarAuthClient.confirmSessionKey(...)`. Restart-normal, work-mode negotiation errors, connectivity failures, and other terminal results follow separate branches. Several non-success paths close the auth client and/or call the service's internal disconnect helper; do not collapse them into a generic success state.
+- `com.ucarmd.f.onSessionKeyConfirmed(CarAuthClient, boolean, int)` obtains the screen-info string through `CarAuthClient.getScreenInfo()`, forwards the result code/boolean and screen-info string to `com.ucarmd.h.a(int, String)`, then closes the auth channel.
+- The concrete body of `com.ucarmd.h.a(int, String)` is not present in this DEX slice (the method reference has no code item here), so this trace does **not** establish what that helper does with the confirmation result or whether it starts display on success only.
+
+### Remote-display startup method
+
+A separate `ShareLinkService` helper contains the log string `start rtsp client`. Its observed instruction sequence:
+
+1. Logs the start message.
+2. Calls `RemoteDisplayNative.init(applicationContext, "SYNERGY_TV")`.
+3. Builds/updates the remote-display state object.
+4. Parses the supplied screen-info string with `UCarScreenConfig.parseScreenInfo(...)`.
+5. Stores the parsed screen configuration and passes the screen-info string to the remote-display object.
+
+This proves that the official APK has a native remote-display initialization path driven by screen information. It does **not** prove that this helper is called immediately after `onSessionKeyConfirmed`: there are multiple call sites to the service helper, and the intervening helper `com.ucarmd.h` must be traced across the APK's DEX files / callback implementation before the order can be claimed.
+
+### Implementation consequence
+
+Keep the receiver's state machine split into distinct stages rather than starting RTSP or a display surface merely because AOA switched successfully:
+
+`AOA attached → create-socket requests → local TCP clients accepted → default-channel readiness → AUTH channel connected → AuthRequest/AuthResponse key agreement → AuthConfirm result → screen-info handoff → remote-display initialization`
+
+The arrows after the first AOA records are **expected code-path stages**, not stages observed in the current hardware trace. The current capture has only the RTSP/UIBC server-listener requests and no verified local accepts, readiness event, authentication result, or screen-info handoff. Before implementing active socket/auth/display behavior, obtain a redacted time-correlated trace that distinguishes listener bind/accept, outgoing AOA control records, auth result, and display startup. Never log raw serial/PIN values, keys, nonces, certificates, or auth payloads.
