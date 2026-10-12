@@ -42,6 +42,29 @@ Observed decoded fields according to the current static-analysis-derived decoder
 | 8 | `socketType` | 1 | 1 | extraction observed; enum meaning not confirmed |
 | 9 | `channelMessageType` | 2 | 2 | extraction observed; enum meaning not confirmed |
 
+### Confirmed port classification from the official APK
+
+A second pass over the official APK's DEX instructions resolved the two observed port values against the enum initializer for `com.ucar.protocol.channel.ChannelType`. The initializer constructs these entries (port values are decimal):
+
+| Official enum | Port | Status |
+|---|---:|---|
+| `CUSTOM` | 0 | Static APK constant |
+| `UIBC` | 4321 | Static APK constant; matches hardware record 2 |
+| `RTSP` | 7236 | Static APK constant; matches hardware record 1 |
+| `RTP` | 15550 | Static APK constant |
+| `AUTH` | 57209 | Static APK constant |
+| `CONTROL` | 57219 | Static APK constant |
+| `MEDIA` | 57229 | Static APK constant |
+| `SENSOR` | 57239 | Static APK constant |
+| `CERT` | 57249 | Static APK constant |
+| `VIDEO` | 57259 | Static APK constant |
+
+The create-socket record handler calls `ChannelType.fromPort(port)`. Therefore, the port field values in the captured records map to the official enum names: record 1's port 7236 maps to `RTSP`; record 2's port 4321 maps to `UIBC`. This is stronger than matching a port list found elsewhere because the mapping is present in the inspected APK itself.
+
+The handler also contains the diagnostic text `Expect received sever socket channel id is -1, but received`, and the captured second u32 is `0xFFFFFFFF` (-1). This supports the interpretation that -1 is an expected sentinel in this create-socket path. The exact relationship between this field and the later channel IDs still needs to be reconstructed from the surrounding branches before implementing it.
+
+The handler's code path also contains a readiness log, `all needed default socket ready`, followed by references to `ShareLinkService` and `CarAuthClient.start()`. This establishes code-level links between create-socket processing, readiness handling, and authentication startup, but does not by itself prove that the observed session reached the readiness branch. The diagnostic app remains read-only and does not open these sockets.
+
 The log does **not** prove that the receiver should connect to either port. No socket is opened by the diagnostic path. The two distinct values should be traced through the official APK before any active connection is implemented.
 
 The 10-second capture still produced only these two records, with repeated 500 ms idle intervals. This shows no additional readable record arrived at the selected Bulk IN endpoint during that capture window; it does not prove that no later message exists or that authentication was attempted.
