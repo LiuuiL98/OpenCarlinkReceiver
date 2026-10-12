@@ -9,6 +9,12 @@ package com.opencarlink.receiver.protocol;
 public final class AoaCreateSocketRecord {
     public static final int MIN_RECORD_LENGTH = 10;
 
+/** Official DEX branch: socketType 1 constructs a local ServerSocket(port). */
+public static final int SOCKET_TYPE_SERVER = 1;
+
+/** The official server-socket branch expects channelId == -1. */
+public static final int SERVER_SOCKET_CHANNEL_ID = -1;
+
     public final int port;
     public final int channelId;
     public final int socketType;
@@ -36,6 +42,11 @@ public final class AoaCreateSocketRecord {
                 (int) readUnsignedIntBigEndian(data, 4),
                 data[8] & 0xff,
                 data[9] & 0xff);
+    }
+
+    /** True only for the socketType branch confirmed to create ServerSocket(port). */
+    public boolean requestsServerSocket() {
+        return socketType == SOCKET_TYPE_SERVER;
     }
 
     private static long readUnsignedIntBigEndian(byte[] data, int offset) {
