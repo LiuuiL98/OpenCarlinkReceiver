@@ -790,6 +790,14 @@ public class MainActivity extends Activity {
                                     if (record.logicalBodyLength >= 8) {
                                         line += " body_u32be_offset4=" + AoaTransportHeaderProbe.wordBigEndian(record.body, 4);
                                     }
+                                    // The create-socket field labels come from static inspection of the
+                                    // official receiver parser; this remains diagnostic-only and opens nothing.
+                                    if (record.createSocket != null) {
+                                        line += " decoded_create_socket={port:" + record.createSocket.port
+                                                + ",channel_id:" + record.createSocket.channelId
+                                                + ",socket_type:" + record.createSocket.socketType
+                                                + ",channel_message_type:" + record.createSocket.channelMessageType + "}";
+                                    }
                                     appendTraceLine(line);
                                     if (summary.length() > 0) summary.append("\n");
                                     summary.append("#").append(records).append(" channel=")
