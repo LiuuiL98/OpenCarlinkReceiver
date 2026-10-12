@@ -78,6 +78,18 @@ This resolves the most important ambiguity in the current hardware trace: both o
 
 The log does **not** prove that the receiver should connect to either port. No socket is opened by the diagnostic path. The two distinct values should be traced through the official APK before any active connection is implemented.
 
+### Create-socket branch: channel message type and client-thread behavior
+
+A further method-level pass over `LK6/h`, the thread created for the non-server branch, resolves part of the previously unknown message-type field:
+
+- Its `toString()` method compares the message-type field with integer `3`; the value `3` is labeled `ucar`, while the alternate branch is labeled `raw`. This is a direct observation from the official APK's branch and string constants.
+- The captured value `channelMessageType=2` therefore follows the `raw` branch in that diagnostic representation. Do not interpret this as a video codec or as proof that the bytes are uncompressed image data; `raw` here is only the official socket-thread's transport/message-mode label.
+- `LK6/h.run()` obtains a socket, wraps its input and output streams, reads channel data, and routes data through distinct `ucar channel` and `raw channel` paths. Those paths copy data and call the AOA USB bulk-transfer helper to send it back to the phone. This establishes that the thread participates in socket↔USB forwarding rather than being merely a passive TCP reader.
+- The full socket-acquisition/connect method and the exact mapping between all numeric socket/message values and protocol roles are not yet completely resolved. The DEX references a socket-returning helper, but its complete implementation/call graph must be decoded before we implement it.
+- The captured records both have `socketType=1`, so they do **not** instantiate `LK6/h` at all; the client-thread behavior above is adjacent protocol logic, not evidence that the observed RTSP/UIBC records connect outward.
+
+This narrows the interpretation of the captured records: `channelMessageType=2` is classified as `raw` by the official thread's diagnostic representation, while `socketType=1` still selects the server-listener branch. Keep those two independent fields separate in any implementation.
+
 The 10-second capture still produced only these two records, with repeated 500 ms idle intervals. This shows no additional readable record arrived at the selected Bulk IN endpoint during that capture window; it does not prove that no later message exists or that authentication was attempted.
 
 ## Sender-side Android activity evidence
