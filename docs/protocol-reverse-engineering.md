@@ -368,3 +368,17 @@ Device pair: Samsung Galaxy S25 (Android 16 / One UI 8.5, sender) → Samsung Ga
 Add a separately gated **socket lifecycle probe**, not an automatic protocol implementation. It should correlate monotonic timestamps for each received create-socket request with: listener bind success/failure, local client accept, assigned channel ID, outgoing AOA control-record metadata, default-channel readiness, AUTH listener bind/accept, and high-level auth/display state transitions. For each event, log only port, channel ID, socket/message type, elapsed time, result boolean, and redacted exception class/message. Never log raw AOA identity strings, USB PIN, certificate contents, key material, nonces, or authentication payloads.
 
 Keep the probe opt-in and avoid creating listeners or writing AOA records during the existing read-only test. Validate framing and metadata parsing with unit tests first; then run a distinct hardware session. Do not synthesize an AUTH record or claim authentication/video success from the current trace.
+
+
+## Experimental RTSP/UIBC socket-lifecycle probe (build 0.2.6-dev.1)
+
+The app now has a separate, confirmation-gated test mode intended to test the next hypothesis from the 2026-10-12 S25 → S9+ trace. The existing read-only framed reader and raw Bulk IN test remain separate and unchanged in purpose.
+
+- Only accepts create-socket requests on outer channel 1 with requested channel ID -1, socket type 1, and port 7236 or 4321. It ignores other ports/types rather than binding arbitrary requested ports.
+- Attempts local listeners on 7236 (RTSP) and 4321 (UIBC), logging bind success/failure and local TCP accept/timeout.
+- After a local client is accepted, it sends an 18-byte candidate AOA control frame on Bulk OUT: outer channel ID 1, body length 10, port, assigned channel ID starting at 16, outgoing socket type 3 (RTSP) or 4 (UIBC), and candidate message type 2. Outgoing socket-type mapping and initial channel ID come from static reverse engineering. The exact response message-type semantics are still a hardware-validation hypothesis; the encoder unit test validates byte layout, not peer acceptance.
+- This probe does **not** forward TCP data to/from USB and does not implement AUTH, RTSP negotiation, UIBC payload handling, or media streaming. It is deliberately not a functional bridge. It is opt-in, warns before writing, limits itself to the two observed ports, and closes sockets at the end of the short test window.
+- Expected useful evidence is the correlated sequence `AOA_SOCKET_REQUEST` → `TCP_LISTENER_BIND` → `TCP_ACCEPT` → `AOA_SOCKET_RESPONSE_WRITE`, including actual USB OUT byte count. If no accept occurs, the probe cannot validate the outgoing record yet; inspect the client connection path and listener bind errors. If a full 18 bytes are written, that confirms only host-side transfer completion, not that the S25 accepted the record.
+- Never infer successful channel setup, authentication, or display startup solely from a successful bind or USB OUT write. Do not log raw AOA identity/PIN strings, keys, nonces, certificates, or authentication payloads.
+
+The test `AoaCreateSocketFrameEncoderTest` verifies the candidate frame layout for both observed ports and rejects invalid channel IDs. Hardware results are still required to establish whether the candidate response is accepted by the S25.
