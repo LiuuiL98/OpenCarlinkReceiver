@@ -7,7 +7,7 @@ The diagnostic UI now has two separate receive actions:
 - **AOA 按帧读取并解析（只读）** — uses `AoaUsbExactLengthSource` and `AoaRecordReader` to request an 8-byte transport header, validate it before allocation, then read exactly the declared body length (with the official minimum request size of 8 bytes). Local body allocation is capped at 1 MiB.
 - **原始 Bulk IN 抓包（诊断）** — preserves the prior raw USB read probe for packet/transfer observation.
 
-The USB adapter accumulates short positive reads. A negative/no-data result before any bytes of a requested segment is treated as no data; a no-data result after partial progress becomes an I/O failure. Incomplete header/body data is never dispatched as a record.
+The USB adapter accumulates short positive reads. A negative/no-data result before any bytes of a requested segment is treated as no data; a no-data result after partial progress becomes an I/O failure. Incomplete header/body data is never dispatched as a record. The capture loop treats a 500 ms no-header timeout as an idle interval rather than ending immediately, and listens for up to 10 seconds (or 50 complete records); idle counters are logged periodically.
 
 ## Trace format
 
