@@ -295,3 +295,21 @@ Keep the receiver's state machine split into distinct stages rather than startin
 `AOA attached → create-socket requests → local TCP clients accepted → default-channel readiness → AUTH channel connected → AuthRequest/AuthResponse key agreement → AuthConfirm result → screen-info handoff → remote-display initialization`
 
 The arrows after the first AOA records are **expected code-path stages**, not stages observed in the current hardware trace. The current capture has only the RTSP/UIBC server-listener requests and no verified local accepts, readiness event, authentication result, or screen-info handoff. Before implementing active socket/auth/display behavior, obtain a redacted time-correlated trace that distinguishes listener bind/accept, outgoing AOA control records, auth result, and display startup. Never log raw serial/PIN values, keys, nonces, certificates, or auth payloads.
+
+
+## AUTH channel socket role and port override (static DEX trace, 2026-10-12)
+
+A further pass into `com.ucar.protocol.channel.socket.SocketChannel` resolves a critical ambiguity in the AUTH startup path.
+
+- `CarAuthClient.<init>` constructs its inner channel callback with `ChannelType.AUTH` and both boolean constructor arguments set to `true`. That callback constructs `SocketChannel(ChannelType, boolean, boolean)`; the first boolean is passed to `NetChannel(ChannelType, boolean)`, whose `isServerChannel()` value selects server versus client startup. The second boolean initializes the socket channel's message-pool option.
+- `CarAuthClient.start()` calls `mAuthChannel.start(513, mRemoteAddress)` after checking the channel's current state. In `SocketChannel.start(int, String)`, the supplied port is applied only when `ChannelType == CUSTOM`; AUTH is a predefined enum, so the supplied `513` is **not** an override for AUTH's port. The address is set to the supplied remote-address string, observed as `127.0.0.1`.
+- `SocketChannel.start()` branches on `isServerChannel()`. The server branch invokes `startServerChannel(port, address, options)`; that method creates a `ServerSocket`, binds an `InetSocketAddress(address, port)`, invokes `onServerBound()`, and then waits in `accept()`.
+- For `ChannelType.AUTH`, the enum port is **57209**. The channel's `onServerBound()` callback in the official APK calls the AOA create-socket sender with the bound channel's port and server-channel metadata. Therefore the statically reconstructed order is: default RTSP/UIBC listener readiness → construct AUTH channel → bind the local AUTH listener at `127.0.0.1:57209` → emit the AUTH create-socket control record → accept a local TCP client → report channel-connect success → begin key negotiation.
+
+This corrects an easy but important misreading: the AUTH channel is not shown connecting outward to `127.0.0.1:513`. The `513` argument does not replace the predefined AUTH port, and the selected channel mode is a local server listener. The live phone-side response and successful accept are still unverified; this is a static APK call-path conclusion. Our receiver should not emit an AUTH record or initiate authentication based only on the two currently captured RTSP/UIBC records.
+
+### Revised expected connection stages
+
+`AOA attached → RTSP/UIBC server-listener requests → both default listeners/read threads registered → AUTH local listener bound at 127.0.0.1:57209 → AUTH create-socket record emitted → local AUTH client accepted → AuthRequest/AuthResponse key agreement → AuthConfirm → screen-info handoff → remote-display initialization`
+
+The stages after the captured RTSP/UIBC requests remain unobserved on hardware. In particular, distinguish **AUTH listener bound** from **AUTH client accepted**, and distinguish both from **session-key confirmation**. Log only state transitions, ports, channel IDs, booleans, elapsed time, and error class/message after redaction; never log credentials, key material, nonces, certificates, or authentication payload bytes.
