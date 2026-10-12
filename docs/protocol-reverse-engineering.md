@@ -140,6 +140,45 @@ This section records the call path reconstructed from the official APK's `classe
 - **Not yet proven:** the S25 accepts our test accessory identity as a valid ICCOA head unit; either local TCP listener receives a client; the readiness gate is reached in the captured session; authentication succeeds; or a phone-side channel ID exactly matches the inferred outgoing assignment.
 - **Next validation:** collect a time-correlated, redacted trace showing incoming AOA records, local listener accept/connect events, outgoing AOA record metadata (port/channel ID/socket type/message type only), and authentication stage/result logs. Do not capture or publish raw serial/PIN values, keys, nonces, certificates, or authentication payloads. Keep the receiver in read-only mode until the sequence is confirmed.
 
+
+## Authentication call-chain trace: `CarAuthClient` to session-key confirmation (static DEX trace, 2026-10-12)
+
+This trace follows the authentication code only; it does not send any messages or bypass authentication.
+
+### 1. Auth channel connection and request start
+
+- `CarAuthClient` constructs a `SocketChannel` for `ChannelType.AUTH` and installs a callback. The callback reports channel-connect success/failure through `CarAuthListener.onChannelConnectResult(...)`.
+- `CarAuthClient.start()` first checks `mAuthChannel.isConnected()`. If already connected, it starts the channel with the stored remote address; exceptions report `ERROR_CONNECTIVITY` to the listener.
+- The `agreeOnSecurityKeys(...)` method selects a `ClientKeyNegotiator.ConnectionType` branch (`NORMAL`, `QUICK`, or `QUICK_W_UC`), asks `ClientKeyNegotiator.generateKeyNegotiationInfo(...)` to construct an `AuthRequest`, wraps it using `UCarAuthProtocol.createAuthRequestMessage(...)`, and submits it through `SocketChannel.request(...)`. Exceptions are reported to the listener as `ERROR_AND_RESTART_NORMAL_CONNECTION`.
+- The protocol builder identifies the request as category `AUTH`, message type `REQ`, method index `1`. The response parser requires category `AUTH`, message type `RES`, and method index `2` before parsing the protobuf body. `AuthConfirm` is a separate `SEND` message at method index `3`.
+
+### 2. AuthResponse validation and key agreement
+
+The response callback `CarAuthClient$2.completed(AuthResponse)` logs that client key-negotiation information was received, then calls `ClientKeyNegotiator.agreeOnSessionKey(response)`. The static DEX flow shows these stages:
+
+1. `parseServerInfo(response)` extracts the server version, server authentication public key, its HMAC/MAC, agreement public key, agreement-key signature, random/nonce, result code, and server ID.
+2. An ill-formed response returns `ERROR`. Server result codes can lead to `ERROR_FROM_SERVER`; work-mode negotiation failure has a separate `ERROR_WORK_MODE_NEGOTIATION` result.
+3. For a normal connection, the code derives a peer-key alias from the server ID, obtains/encodes the relevant public keys, validates peer authentication and agreement-key material, derives the session key, and saves the peer record. If key agreement or saving the peer fails, it removes the peer record and returns an error.
+4. A quick-connection branch uses a stored peer record and still performs key/session-agreement checks; failure does not silently become success.
+5. The response callback then reports the `ClientKeyNegotiator.Result` and work-mode value to `CarAuthListener.onResult(...)`. The result is an explicit state outcome, not just “a response was received.”
+
+Do not copy server keys, nonces, signatures, or IDs from a live session into logs or public issues. The names above describe the data fields, not their values.
+
+### 3. Encrypted AuthConfirm and callback result
+
+- `CarAuthClient.confirmSessionKey(...)` formats the confirmation context as `%s:%d`, encodes it as UTF-8, encrypts it through `SecurityManager.encrypt(...)`, wraps the ciphertext in `UCarProto.AuthConfirm`, creates the AUTH method-3 message, and sends it via `mAuthChannel.send(...)`.
+- The send callback reports completion to `CarAuthListener.onSessionKeyConfirmed(client, success, selectedWorkMode)`. Its failure path logs `writing client connection info failed` and reports a failed confirmation.
+- The service-side listener `com.ucarmd.f` forwards the confirmation result and screen-info string to a service helper, then closes the auth channel. This is a post-confirmation callback path; it is not evidence that a real session has passed it.
+- The service listener also contains explicit recovery branches for normal-connection restart, user confirmation, connectivity retry, work-mode negotiation failure, and terminal failure. A retry branch posts a delayed retry on the main-thread `Handler`; the DEX includes distinct “retry count exhausted” outcomes.
+
+### 4. What this means for OpenCarlinkReceiver
+
+We now have a static, ordered authentication outline:
+
+`AUTH SocketChannel connect → AuthRequest (REQ/1) → AuthResponse validation (RES/2) → server-info/key agreement → encrypted AuthConfirm (SEND/3) → confirmation callback`.
+
+This is **not** an implementation recipe for fabricating authentication. The project must continue to treat the official authentication and certificate/key checks as mandatory. The immediate engineering task is to expose safe diagnostics for transport readiness and stage outcomes, while leaving secrets and payloads redacted. Only after real bidirectional captures establish the channel and callback sequence should protocol integration be attempted.
+
 ## Sender-side Android activity evidence
 
 The previously collected S25 system log contains an accessory-attach launch of `com.samsung.android.carlink/.connection.iccoa.IccoaUsbConnectionActivity` at 2026-10-12 00:11:29.711. The activity was requested/resumed, then the system logged `wm_finish_activity` at 00:11:29.731 and destruction at 00:11:29.745. This is evidence that the phone's AOA accessory matching reached the Samsung ICCOA USB activity, but the activity ended almost immediately. It is **not** evidence of successful ICCOA authentication or a live Carlink session.
