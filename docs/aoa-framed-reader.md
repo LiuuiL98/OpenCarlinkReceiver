@@ -11,7 +11,7 @@ The USB adapter accumulates short positive reads. A negative/no-data result befo
 
 ## Trace format
 
-The framed path logs each completed record with channel ID, declared logical body length, and at most 64 bytes of body HEX. For bodies with enough bytes it logs the unsigned big-endian words at offsets 0 and 4 as raw numeric observations. These labels deliberately do not assert business semantics.
+The framed path logs each completed record with channel ID, declared logical body length, and at most 64 bytes of body HEX. For channel-1 records, it additionally logs the current static-analysis-derived create-socket field extraction (port, channel ID, socket type, channel message type). These decoded field names are not proof of business semantics, and the diagnostic path does not open a socket. See [protocol reverse-engineering notes](protocol-reverse-engineering.md) for the consolidated official-APK findings and confidence levels.
 
 The receive path stops at outer framing/channel metadata. It does not open sockets, authenticate, send protocol messages, or feed raw USB chunks to the UCar parser.
 
