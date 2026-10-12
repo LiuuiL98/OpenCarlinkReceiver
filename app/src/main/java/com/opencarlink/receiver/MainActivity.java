@@ -176,7 +176,7 @@ public class MainActivity extends Activity {
         root.addView(title, matchWrap());
 
         TextView subtitle = new TextView(this);
-        subtitle.setText("车机兼容性诊断工具 · 版本 0.2.6-dev.2");
+        subtitle.setText("车机兼容性诊断工具 · 版本 0.2.6-dev.3");
         subtitle.setTextColor(0xFFB7C5D3);
         subtitle.setTextSize(13);
         subtitle.setPadding(0, dp(6), 0, dp(18));
@@ -304,16 +304,16 @@ public class MainActivity extends Activity {
         root.addView(rawAoaReadButton, rawAoaReadParams);
 
         Button socketProbeButton = new Button(this);
-        socketProbeButton.setText("实验性：验证 RTSP/UIBC 套接字生命周期");
+        socketProbeButton.setText("USB AOA 连续记录读取（只读，不发送控制帧）");
         socketProbeButton.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View v) { confirmAoaSocketLifecycleProbe(); }
+            @Override public void onClick(View v) { requestAoaFramedPermission(); }
         });
         LinearLayout.LayoutParams socketProbeParams = matchWrap();
         socketProbeParams.topMargin = dp(8);
         root.addView(socketProbeButton, socketProbeParams);
 
         TextView socketProbeHint = new TextView(this);
-        socketProbeHint.setText("实验模式：只处理已观察到的 7236/4321 创建请求；尝试绑定本地监听端口。客户端接入后发送一条 18 字节 AOA 创建套接字控制记录，用于验证通道分配假设。不转发视频/音频/认证数据，测试结束会关闭套接字。");
+        socketProbeHint.setText("USB 专项只读模式：读取 AOA Bulk IN 上的完整外层记录，记录通道 ID、声明长度和有限 HEX 样本；不创建 TCP 监听、不发送 Bulk OUT 控制帧、不处理 Wi-Fi、媒体或认证数据。需要逐次 USB 原始返回块及完整 HEX 时，请使用上方“原始 Bulk IN 抓包（诊断）”。");
         socketProbeHint.setTextColor(0xFFFFD166);
         socketProbeHint.setTextSize(12);
         root.addView(socketProbeHint, matchWrap());
@@ -1179,7 +1179,7 @@ public class MainActivity extends Activity {
                                 StringBuilder sampleHex = new StringBuilder();
                                 long firstDataAtMs = -1;
                                 long startedAtMs = android.os.SystemClock.elapsedRealtime();
-                                long deadline = startedAtMs + 5000;
+                                long deadline = startedAtMs + 15000;
                                 appendTraceLine("BULK_IN_START vid=" + hex4(device.getVendorId())
                                         + " pid=" + hex4(device.getProductId())
                                         + " interface=" + claimedInterface.getId()
@@ -1194,7 +1194,7 @@ public class MainActivity extends Activity {
                                             + " type=" + ep.getType() + " max_packet=" + ep.getMaxPacketSize());
                                 }
                                 while (android.os.SystemClock.elapsedRealtime() < deadline
-                                        && successfulReads < 20 && totalBytes < 65536) {
+                                        && successfulReads < 100 && totalBytes < 262144) {
                                     int count = connection.bulkTransfer(inEndpoint, buffer, buffer.length, 500);
                                     long elapsedMs = android.os.SystemClock.elapsedRealtime() - startedAtMs;
                                     if (count > 0) {
@@ -1230,7 +1230,7 @@ public class MainActivity extends Activity {
                                         + " no_data=" + timeoutOrNoData + " errors=" + errors
                                         + " ucar_parser=not_applied_at_raw_bulk_in"
                                         + " note=aoa_transport_header_and_channel_dispatch_must_be_resolved");
-                                result = "AOA Bulk IN 只读测试结束（最长约 5 秒）。接口=" + claimedInterface.getId()
+                                result = "AOA Bulk IN 只读测试结束（最长约 15 秒）。接口=" + claimedInterface.getId()
                                         + "，端点=" + hex2(inEndpoint.getAddress())
                                         + "，成功读取次数=" + successfulReads
                                         + "，收到字节=" + totalBytes
