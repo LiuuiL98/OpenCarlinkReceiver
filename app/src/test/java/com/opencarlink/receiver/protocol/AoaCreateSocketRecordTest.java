@@ -15,6 +15,30 @@ public class AoaCreateSocketRecordTest {
         assertEquals(7, record.channelId);
         assertEquals(254, record.socketType);
         assertEquals(128, record.channelMessageType);
+        assertFalse(record.requestsServerSocket());
+    }
+
+    @Test public void capturedHardwareRecordsRequestServerSockets() {
+        byte[] rtsp = new byte[] {
+                0x00, 0x00, 0x1c, 0x44,
+                (byte)0xff, (byte)0xff, (byte)0xff, (byte)0xff,
+                0x01, 0x02
+        };
+        byte[] uibc = new byte[] {
+                0x00, 0x00, 0x10, (byte)0xe1,
+                (byte)0xff, (byte)0xff, (byte)0xff, (byte)0xff,
+                0x01, 0x02
+        };
+
+        AoaCreateSocketRecord rtspRecord = AoaCreateSocketRecord.decode(rtsp, rtsp.length);
+        AoaCreateSocketRecord uibcRecord = AoaCreateSocketRecord.decode(uibc, uibc.length);
+
+        assertEquals(7236, rtspRecord.port);
+        assertEquals(4321, uibcRecord.port);
+        assertEquals(AoaCreateSocketRecord.SERVER_SOCKET_CHANNEL_ID, rtspRecord.channelId);
+        assertEquals(AoaCreateSocketRecord.SERVER_SOCKET_CHANNEL_ID, uibcRecord.channelId);
+        assertTrue(rtspRecord.requestsServerSocket());
+        assertTrue(uibcRecord.requestsServerSocket());
     }
 
     @Test public void acceptsExactlyTenBytes() {
