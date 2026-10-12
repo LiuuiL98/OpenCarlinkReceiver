@@ -273,8 +273,8 @@ The next call-site pass clarifies the boundary between authentication and the di
 ### Authentication result handling
 
 - `com.ucarmd.f.onResult(CarAuthClient, ClientKeyNegotiator.Result, int)` treats `OK` specially: it logs `key agreement OK` and calls `CarAuthClient.confirmSessionKey(...)`. Restart-normal, work-mode negotiation errors, connectivity failures, and other terminal results follow separate branches. Several non-success paths close the auth client and/or call the service's internal disconnect helper; do not collapse them into a generic success state.
-- `com.ucarmd.f.onSessionKeyConfirmed(CarAuthClient, boolean, int)` obtains the screen-info string through `CarAuthClient.getScreenInfo()`, forwards the result code/boolean and screen-info string to `com.ucarmd.h.a(int, String)`, then closes the auth channel.
-- The concrete body of `com.ucarmd.h.a(int, String)` is not present in this DEX slice (the method reference has no code item here), so this trace does **not** establish what that helper does with the confirmation result or whether it starts display on success only.
+- `com.ucarmd.f.onSessionKeyConfirmed(CarAuthClient, boolean, int)` branches on the confirmation boolean. If it is false, it skips the screen-info handoff and closes the auth channel. If true, it obtains screen info through `CarAuthClient.getScreenInfo()`, calls `com.ucarmd.h.a(int, String)`, then closes the auth channel.
+- The concrete interface implementation for this Wi-Fi P2P path is `com.ucarmd.a`. In `com.ucarmd.b.onConnected(...)`, the official app constructs `com.ucarmd.a` with the connection parameters and passes it to `com.ucarmd.f` as the auth callback's handoff target. `com.ucarmd.a.a(int, String)` then calls the `ShareLinkService` helper that contains the `start rtsp client` log and remote-display initialization. This resolves the handoff for the observed P2P connection path: remote-display startup is gated by successful session-key confirmation, rather than by AOA attachment alone.
 
 ### Remote-display startup method
 
@@ -286,7 +286,7 @@ A separate `ShareLinkService` helper contains the log string `start rtsp client`
 4. Parses the supplied screen-info string with `UCarScreenConfig.parseScreenInfo(...)`.
 5. Stores the parsed screen configuration and passes the screen-info string to the remote-display object.
 
-This proves that the official APK has a native remote-display initialization path driven by screen information. It does **not** prove that this helper is called immediately after `onSessionKeyConfirmed`: there are multiple call sites to the service helper, and the intervening helper `com.ucarmd.h` must be traced across the APK's DEX files / callback implementation before the order can be claimed.
+This proves that the official APK has a native remote-display initialization path driven by screen information. For the Wi-Fi P2P callback path described above, the handoff reaches this helper through `com.ucarmd.a.a(int, String)` only when session-key confirmation reports success. The APK also has other call sites / implementations, so do not generalize this exact sequence to every connection mode without tracing that mode separately.
 
 ### Implementation consequence
 
