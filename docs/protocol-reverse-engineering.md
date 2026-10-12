@@ -74,7 +74,7 @@ The create-socket handler is the obfuscated class `LK6/d`, method `a(byte[], int
 - In the server branch, `channelId == -1` is the expected value; the handler logs `Expect received sever socket channel id is -1, but received ...` when the value differs.
 - Once the default socket/read-thread collection passes its readiness checks, the handler logs `all needed default socket ready`, updates the `usb_connected` state, and constructs `CarAuthClient` with `127.0.0.1` before calling `start()`.
 
-This resolves the most important ambiguity in the current hardware trace: both observed records have `socketType=1` and `channelId=-1`, so the official code path identifies them as local server-socket requests for RTSP port 7236 and UIBC port 4321. The project must not implement these by blindly opening outbound client connections. We have not yet verified successful binds or the complete phone-side connection sequence on hardware, and `channelMessageType=2` remains semantically unresolved.
+This resolves the most important ambiguity in the current hardware trace: both observed records have `socketType=1` and `channelId=-1`, so the official code path identifies them as local server-socket requests for RTSP port 7236 and UIBC port 4321. The project must not implement these by blindly opening outbound client connections. We have not yet verified successful binds or the complete phone-side connection sequence on hardware, while `channelMessageType=2` is classified as `raw` by the official thread's `toString()` branch; the meaning of the outgoing record still needs bidirectional validation.
 
 The log does **not** prove that the receiver should connect to either port. No socket is opened by the diagnostic path. The two distinct values should be traced through the official APK before any active connection is implemented.
 
@@ -87,11 +87,25 @@ A further method-level pass over `LK6/h`, the thread created for the non-server 
 - `LK6/h.run()` obtains a socket, wraps its input and output streams, reads channel data, and routes data through distinct `ucar channel` and `raw channel` paths. Those paths copy data and call the AOA USB bulk-transfer helper to send it back to the phone. This establishes that the thread participates in socket↔USB forwarding rather than being merely a passive TCP reader.
 - The socket-acquisition path for `socketType != 1` is now confirmed as a TCP connection to `127.0.0.1:<port>`. What remains unresolved is which local component is expected to listen on each such port, how all numeric socket/message values are assigned, and the complete connect timing. Do not implement this branch until those dependencies are traced.
 
-A related reverse path is visible in `LK6/f` after `ServerSocket.accept()` succeeds: it resolves the channel enum from the listening port, obtains a new value from a shared `AtomicInteger`, calls the create-socket sender `LK6/d.d(int, int, int, int)`, and assigns a channel ID to the shared socket-read thread. This strongly indicates that accepting a local TCP client is followed by an AOA-side channel-ID/control update. The exact numeric argument order and emitted message semantics still need to be validated against the sender's subsequent records; do not hard-code an assumed sequence yet.
+A related reverse path is visible in `LK6/f` after `ServerSocket.accept()` succeeds: it resolves the channel enum from the listening port, obtains a new value from a shared `AtomicInteger`, calls the create-socket sender `LK6/d.d(int, int, int, int)`, and assigns that channel ID to the shared socket-read thread. The shared counter is initialized to **16**, and `getAndIncrement()` means the first accepted channel receives ID 16, followed by 17, 18, and so on, assuming no earlier allocations. This ties local TCP acceptance to an AOA-side channel-ID/control update.
 
-#### Four-argument create-socket sender
+#### Four-argument create-socket sender and socket-type mapping
 
-The sender `LK6/d.d(int, int, int, int)` logs the arguments in the order `port`, `channelId`, `socketType`, `channelMsgType`, then writes a 10-byte body using byte-array copies. The `LK6/f` accept path calls it with the port read from its thread state, an enum/allocator-derived channel identifier, a socket-type value selected by the enum switch, and the stored channel-message type. After sending, the accepted socket-read thread receives the allocated channel ID. This confirms the API argument order, but the enum-switch's full numeric mapping and the receiver-side meaning of the outgoing message still require a known-good bidirectional capture.
+The sender `LK6/d.d(int, int, int, int)` logs arguments in the order `port`, `channelId`, `socketType`, `channelMsgType`, then writes a 10-byte body. In the `LK6/f` accept path, `socketType` is selected by a switch over the `ChannelType` enum ordinal. The decoded mapping is:
+
+| Channel enum | Port | Outgoing socketType after local accept | Evidence |
+|---|---:|---:|---|
+| UIBC | 4321 | 4 | DEX enum-switch case |
+| RTSP | 7236 | 3 | DEX enum-switch case |
+| RTP | 15550 | 5 | DEX enum-switch case |
+| AUTH | 57209 | 7 | DEX enum-switch case |
+| CONTROL | 57219 | 2 | DEX enum-switch case |
+| MEDIA | 57229 | 6 | DEX enum-switch case |
+| SENSOR | 57239 | 8 | DEX enum-switch case |
+| CERT | 57249 | 9 | DEX enum-switch case |
+| CUSTOM / VIDEO / unmapped enum ordinal | varies | 2 (switch default) | DEX switch default; role-specific behavior still needs validation |
+
+This mapping describes the **outgoing record emitted after the local listener accepts a TCP client**. It must not be confused with the incoming request's `socketType=1`, which selects the local `ServerSocket` branch. The sender's field order and the enum-switch values are now statically resolved; the meaning of the phone's response and the complete live sequence still require a known-good bidirectional hardware capture.
 - The captured records both have `socketType=1`, so they do **not** instantiate `LK6/h` at all; the client-thread behavior above is adjacent protocol logic, not evidence that the observed RTSP/UIBC records connect outward.
 
 This narrows the interpretation of the captured records: `channelMessageType=2` is classified as `raw` by the official thread's diagnostic representation, while `socketType=1` still selects the server-listener branch. Keep those two independent fields separate in any implementation.
@@ -166,7 +180,7 @@ These observations establish the shape of the official authentication flow; they
 
 ### Relation to the captured AOA records
 
-The static AOA handler maps the record's first 32-bit field through `ChannelType.fromPort(port)` and then creates/starts per-channel read handling. The two captured ports are RTSP and UIBC, while the authentication client separately selects `ChannelType.AUTH` (port 57209) and is passed the loopback address `127.0.0.1` by the readiness path. This means the captured 7236/4321 records should not be mistaken for the AUTH TCP endpoint. The exact cross-process socket ownership and how the readiness condition is satisfied still require dynamic correlation.
+The static AOA handler maps the record's first 32-bit field through `ChannelType.fromPort(port)` and then creates/starts per-channel read handling. The two captured ports are RTSP and UIBC, while the authentication client separately selects `ChannelType.AUTH` (port 57209) and is passed the loopback address `127.0.0.1` by the readiness path. This means the captured 7236/4321 records should not be mistaken for the AUTH TCP endpoint. The shared channel counter starts at 16 in the static initializer, but the exact cross-process socket ownership and how the readiness condition is satisfied still require dynamic correlation.
 
 ## Implementation plan
 
