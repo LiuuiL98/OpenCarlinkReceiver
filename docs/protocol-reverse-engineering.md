@@ -65,6 +65,17 @@ The handler also contains the diagnostic text `Expect received sever socket chan
 
 The handler's code path also contains a readiness log, `all needed default socket ready`, followed by references to `ShareLinkService` and `CarAuthClient.start()`. This establishes code-level links between create-socket processing, readiness handling, and authentication startup, but does not by itself prove that the observed session reached the readiness branch. The diagnostic app remains read-only and does not open these sockets.
 
+### Create-socket branch: socketType 1 means local server socket
+
+The create-socket handler is the obfuscated class `LK6/d`, method `a(byte[], int)`. The method compares the decoded `socketType` field with integer `1` before selecting the socket-thread branch.
+
+- When `socketType == 1`, the handler constructs `LK6/f(port, channelId, channelTypeName)`. The constructor of `LK6/f` creates a Java `ServerSocket(port)`; its accept method calls `ServerSocket.accept()`. The handler starts that thread and stores it in a `SparseArray` keyed by port. This is a local listening socket, not a request to connect outward to the phone at that port.
+- When `socketType != 1`, the handler follows a different branch that constructs `LK6/h(port, channelId, channelTypeName)` and starts a separate socket-read thread. The full remote endpoint/connect timing for that branch still needs tracing; do not infer it from the class name alone.
+- In the server branch, `channelId == -1` is the expected value; the handler logs `Expect received sever socket channel id is -1, but received ...` when the value differs.
+- Once the default socket/read-thread collection passes its readiness checks, the handler logs `all needed default socket ready`, updates the `usb_connected` state, and constructs `CarAuthClient` with `127.0.0.1` before calling `start()`.
+
+This resolves the most important ambiguity in the current hardware trace: both observed records have `socketType=1` and `channelId=-1`, so the official code path identifies them as local server-socket requests for RTSP port 7236 and UIBC port 4321. The project must not implement these by blindly opening outbound client connections. We have not yet verified successful binds or the complete phone-side connection sequence on hardware, and `channelMessageType=2` remains semantically unresolved.
+
 The log does **not** prove that the receiver should connect to either port. No socket is opened by the diagnostic path. The two distinct values should be traced through the official APK before any active connection is implemented.
 
 The 10-second capture still produced only these two records, with repeated 500 ms idle intervals. This shows no additional readable record arrived at the selected Bulk IN endpoint during that capture window; it does not prove that no later message exists or that authentication was attempted.
