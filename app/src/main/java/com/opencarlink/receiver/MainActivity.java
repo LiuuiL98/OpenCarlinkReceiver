@@ -760,13 +760,22 @@ public class MainActivity extends Activity {
                                         + " endpoint=" + hex2(inEndpoint.getAddress())
                                         + " timeout_ms=500 local_body_cap=" + localBodyLimit);
                                 StringBuilder summary = new StringBuilder();
-                                while (records < 10
-                                        && android.os.SystemClock.elapsedRealtime() - startedAtMs < 5000) {
+                                int idleTimeouts = 0;
+                                long lastIdleLogAtMs = startedAtMs;
+                                // A 500 ms no-data timeout is normal on an idle Bulk IN endpoint.
+                                // Keep listening so records that arrive later in the session are not missed.
+                                while (records < 50
+                                        && android.os.SystemClock.elapsedRealtime() - startedAtMs < 10000) {
                                     AoaRecordReader.Record record = AoaRecordReader.readOne(source, localBodyLimit);
                                     if (record == null) {
-                                        appendTraceLine("AOA_FRAMED_NO_HEADER elapsed_ms="
-                                                + (android.os.SystemClock.elapsedRealtime() - startedAtMs));
-                                        break;
+                                        idleTimeouts++;
+                                        long nowMs = android.os.SystemClock.elapsedRealtime();
+                                        if (nowMs - lastIdleLogAtMs >= 2000) {
+                                            appendTraceLine("AOA_FRAMED_IDLE timeout_count=" + idleTimeouts
+                                                    + " elapsed_ms=" + (nowMs - startedAtMs));
+                                            lastIdleLogAtMs = nowMs;
+                                        }
+                                        continue;
                                     }
                                     records++;
                                     totalBodyBytes += record.logicalBodyLength;
@@ -789,6 +798,7 @@ public class MainActivity extends Activity {
                                     if (record.logicalBodyLength > sampleLength) summary.append(" sample=").append(sampleLength).append("B");
                                 }
                                 appendTraceLine("AOA_FRAMED_END records=" + records
+                                        + " idle_timeouts=" + idleTimeouts
                                         + " body_bytes=" + totalBodyBytes
                                         + " elapsed_ms=" + (android.os.SystemClock.elapsedRealtime() - startedAtMs)
                                         + " socket_creation=disabled business_writes=disabled");
