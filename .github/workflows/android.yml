@@ -28,6 +28,11 @@ jobs:
         with:
           gradle-version: '8.9'
 
+      - name: Test RTP parser and media helpers
+        run: |
+          cc -std=c99 -Wall -Wextra -Werror app/src/test-native/rtp_packet.c app/src/test-native/test_rtp_packet.c -o /tmp/test_rtp_packet
+          /tmp/test_rtp_packet
+
       - name: Build debug APK
         run: gradle assembleDebug
 
