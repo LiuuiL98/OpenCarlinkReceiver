@@ -41,3 +41,12 @@ This test fixture does not send USB data, open sockets, authenticate, or claim e
 ## Integration gate
 
 Before wiring this parser into the live Android USB path, implement and test a USB exact-length adapter that accumulates short positive reads until the requested count is reached, handles timeout/no-data only before a record starts, and fails closed on partial headers or bodies. Preserve endpoint/interface details and USB detach/re-enumeration handling. Do not pass raw Bulk IN chunks directly to the UCar parser.
+
+
+## 2026-10-12：USB 专项下一轮（0.2.6-dev.3）
+
+- 本轮不把 Wi-Fi/Wi-Fi Direct 状态作为排查前提；当前阶段聚焦 USB AOA Bulk IN/OUT。
+- 将主界面原“RTSP/UIBC 套接字生命周期”按钮改为只读 AOA 外层记录读取入口，避免本轮测试误触发实验性 TCP 生命周期探测及猜测控制记录发送。
+- 原始 Bulk IN 抓取窗口由约 5 秒延长到约 15 秒，最多记录 100 次成功读取、累计 256 KiB；每次返回块仍记录返回长度和 HEX。该模式是原始 USB 传输块，不应直接视为完整协议消息。
+- 下一次硬件测试建议先执行 AOA 切换，再运行“原始 Bulk IN 抓包（诊断）”导出逐次 HEX；随后运行“USB AOA 连续记录读取（只读，不发送控制帧）”对照记录头和正文边界。两次测试应分别执行，避免多个读线程同时占用同一 Bulk IN 端点。
+- 仍不发送未经验证的 Bulk OUT 业务帧；只有原始字节、官方解析逻辑与测试向量相互印证后，才实现下一步协议处理。
