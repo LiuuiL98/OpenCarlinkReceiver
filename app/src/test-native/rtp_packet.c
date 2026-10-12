@@ -1,6 +1,4 @@
 #include "rtp_packet.h"
-#include <string.h>
-
 static uint16_t be16(const uint8_t *p) {
     return (uint16_t)(((uint16_t)p[0] << 8) | p[1]);
 }
@@ -10,11 +8,10 @@ static uint32_t be32(const uint8_t *p) {
 }
 int iccoa_rtp_parse(const uint8_t *p, size_t n, iccoa_rtp_packet *out) {
     size_t off, csrc_bytes, payload_size;
-    unsigned csrc_count;
-    if (!p || !out || n < 12) return -1;
-    if ((p[0] >> 6) != 2) return -1;
-    csrc_count = p[0] & 0x0f;
-    csrc_bytes = (size_t)csrc_count * 4;
+    unsigned cc;
+    if (!p || !out || n < 12 || (p[0] >> 6) != 2) return -1;
+    cc = p[0] & 0x0f;
+    csrc_bytes = (size_t)cc * 4;
     if (csrc_bytes > n - 12) return -1;
     off = 12 + csrc_bytes;
     if (p[0] & 0x10) {
