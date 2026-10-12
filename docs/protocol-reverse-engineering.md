@@ -382,3 +382,23 @@ The app now has a separate, confirmation-gated test mode intended to test the ne
 - Never infer successful channel setup, authentication, or display startup solely from a successful bind or USB OUT write. Do not log raw AOA identity/PIN strings, keys, nonces, certificates, or authentication payloads.
 
 The test `AoaCreateSocketFrameEncoderTest` verifies the candidate frame layout for both observed ports and rejects invalid channel IDs. Hardware results are still required to establish whether the candidate response is accepted by the S25.
+
+
+## Hardware result: socket lifecycle probe (2026-10-12 09:19, app 0.2.6-dev.1)
+
+The user ran the opt-in probe on the same S25 → S9+ USB session. Results:
+
+- AOA device 18D1:2D01, interface 0, Bulk IN 0x81, Bulk OUT 0x01.
+- Exactly two create-socket requests were received: port 7236 and port 4321; both had outer channel ID 1, requested channel ID -1, socket type 1, message type 2.
+- Local wildcard TCP bind succeeded on both ports.
+- Both ServerSocket.accept() calls timed out after 25 seconds.
+- response_writes=0; no candidate outgoing control record was sent.
+- The probe did not report a bind error, USB read error, or any other AOA record during this window.
+
+### Interpretation
+
+This proves the listener creation path works on the S9+ and the requests can be parsed, but it does not prove that a TCP peer was expected to connect over this USB link. The absence of local TCP clients is the current blocking observation. A likely next area to investigate is the separate Wi-Fi Direct / network path and whether a peer-to-peer group/interface was established; this is a hypothesis, not a conclusion from this log. Existing UI only reports whether Wi-Fi is enabled and whether the device advertises Wi-Fi Direct support; it does not prove a P2P group exists or reveal its owner/peer state.
+
+The next diagnostic build adds a before/after snapshot of active network interface names, up/loopback flags, and IPv4 addresses around the socket probe. Treat addresses as potentially identifying information when sharing logs. Compare whether a P2P interface (often named with a p2p prefix, depending on Android build) exists during the session. This snapshot alone still cannot prove peer connectivity; a later step should query Wi-Fi P2P connection/group info with the appropriate Android permission model if needed.
+
+Do not send the candidate socket-response record repeatedly or begin AUTH/video work until the expected network transport path is established. The prior run produced zero response writes, so no response acceptance was tested.
