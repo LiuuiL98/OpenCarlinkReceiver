@@ -1,6 +1,8 @@
 package com.opencarlink.receiver;
 
 import com.opencarlink.receiver.protocol.AoaTransportHeaderProbe;
+import com.opencarlink.receiver.protocol.AoaRecordReader;
+import com.opencarlink.receiver.protocol.AoaUsbExactLengthSource;
 
 import android.app.Activity;
 import android.app.AlertDialog;
@@ -44,6 +46,7 @@ public class MainActivity extends Activity {
     private static final String ACTION_USB_PERMISSION = "com.opencarlink.receiver.USB_PERMISSION";
     private static final String ACTION_AOA_PERMISSION = "com.opencarlink.receiver.AOA_PERMISSION";
     private static final String ACTION_AOA_DATA_PERMISSION = "com.opencarlink.receiver.AOA_DATA_PERMISSION";
+    private static final String ACTION_AOA_FRAME_PERMISSION = "com.opencarlink.receiver.AOA_FRAME_PERMISSION";
     private static final int AOA_VENDOR_ID = 0x18D1;
     private static final int AOA_PRODUCT_ID = 0x2D00;
     private LinearLayout root;
@@ -79,7 +82,7 @@ public class MainActivity extends Activity {
                 refreshDiagnostics();
                 return;
             }
-            if (!ACTION_USB_PERMISSION.equals(action) && !ACTION_AOA_PERMISSION.equals(action) && !ACTION_AOA_DATA_PERMISSION.equals(action)) return;
+            if (!ACTION_USB_PERMISSION.equals(action) && !ACTION_AOA_PERMISSION.equals(action) && !ACTION_AOA_DATA_PERMISSION.equals(action) && !ACTION_AOA_FRAME_PERMISSION.equals(action)) return;
             boolean aoaRequest = ACTION_AOA_PERMISSION.equals(action);
             UsbDevice device = intent.getParcelableExtra(UsbManager.EXTRA_DEVICE);
             boolean granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false);
@@ -89,8 +92,11 @@ public class MainActivity extends Activity {
                 setUsbStatus("USB 权限结果异常：系统未返回设备信息。");
             } else if (!granted) {
                 setUsbStatus("未获得 USB 访问权限。你可以重新点击对应按钮，或检查系统权限提示。");
+            } else if (ACTION_AOA_FRAME_PERMISSION.equals(action)) {
+                setUsbStatus("已获得 AOA 设备 USB 权限，正在按 AOA 记录格式进行只读解析……");
+                testAoaFramedRead(device);
             } else if (ACTION_AOA_DATA_PERMISSION.equals(action)) {
-                setUsbStatus("已获得 AOA 设备 USB 权限，正在进行只读 Bulk IN 接收测试……");
+                setUsbStatus("已获得 AOA 设备 USB 权限，正在进行原始 Bulk IN 抓包……");
                 testAoaBulkRead(device);
             } else if (aoaRequest) {
                 setUsbStatus("已获得 USB 权限，开始执行标准 AOA 握手……");
@@ -117,6 +123,7 @@ public class MainActivity extends Activity {
         IntentFilter filter = new IntentFilter(ACTION_USB_PERMISSION);
         filter.addAction(ACTION_AOA_PERMISSION);
         filter.addAction(ACTION_AOA_DATA_PERMISSION);
+        filter.addAction(ACTION_AOA_FRAME_PERMISSION);
         filter.addAction(UsbManager.ACTION_USB_DEVICE_ATTACHED);
         filter.addAction(UsbManager.ACTION_USB_DEVICE_DETACHED);
         if (Build.VERSION.SDK_INT >= 33) {
@@ -153,7 +160,7 @@ public class MainActivity extends Activity {
         root.addView(title, matchWrap());
 
         TextView subtitle = new TextView(this);
-        subtitle.setText("车机兼容性诊断工具 · 版本 0.2.4");
+        subtitle.setText("车机兼容性诊断工具 · 版本 0.2.5");
         subtitle.setTextColor(0xFFB7C5D3);
         subtitle.setTextSize(13);
         subtitle.setPadding(0, dp(6), 0, dp(18));
@@ -263,13 +270,22 @@ public class MainActivity extends Activity {
         root.addView(resetIdentity, matchWrap());
 
         Button aoaReadButton = new Button(this);
-        aoaReadButton.setText("申请 AOA 设备权限并测试接收");
+        aoaReadButton.setText("AOA 按帧读取并解析（只读）");
         aoaReadButton.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View v) { requestAoaDataPermission(); }
+            @Override public void onClick(View v) { requestAoaFramedPermission(); }
         });
         LinearLayout.LayoutParams aoaReadParams = matchWrap();
         aoaReadParams.topMargin = dp(8);
         root.addView(aoaReadButton, aoaReadParams);
+
+        Button rawAoaReadButton = new Button(this);
+        rawAoaReadButton.setText("原始 Bulk IN 抓包（诊断）");
+        rawAoaReadButton.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { requestAoaDataPermission(); }
+        });
+        LinearLayout.LayoutParams rawAoaReadParams = matchWrap();
+        rawAoaReadParams.topMargin = dp(4);
+        root.addView(rawAoaReadButton, rawAoaReadParams);
 
         TextView aoaWarning = new TextView(this);
         aoaWarning.setText("注意：AOA 会向连接的 Android 设备发送标准 USB 控制请求，并可能导致对端 USB 重新枚举、断开当前调试连接。仅在你明确要测试时点击；此功能不发送 ICCOA 业务数据。");
@@ -455,7 +471,7 @@ public class MainActivity extends Activity {
     private void exportCommunicationTrace() {
         recordEvent("TRACE_EXPORT", "用户请求导出本机通信追踪日志（包含逐次 Bulk IN 原始 HEX）。");
         String text = "OpenCarlinkReceiver ICCOA 通信追踪日志\n"
-                + "应用版本：0.2.4\n"
+                + "应用版本：0.2.5\n"
                 + "设备：" + Build.MANUFACTURER + " " + Build.MODEL
                 + "；Android " + Build.VERSION.RELEASE + "（API " + Build.VERSION.SDK_INT + "）\n"
                 + "说明：包含阶段事件、USB 接口/端点信息和逐次 Bulk IN 原始 HEX；不会主动记录六段 AOA 序列号原文或 usb_pin_code。原始 USB 数据仍可能含协议标识或其他设备信息，分享前请检查。\n\n"
@@ -488,7 +504,7 @@ public class MainActivity extends Activity {
     private void exportDiagnosticLog() {
         recordEvent("EXPORT", "用户请求导出脱敏阶段日志。");
         String text = "OpenCarlinkReceiver USB/AOA 诊断日志\n"
-                + "应用版本：0.2.3\n"
+                + "应用版本：0.2.5\n"
                 + "车机设备：" + Build.MANUFACTURER + " " + Build.MODEL
                 + "；Android " + Build.VERSION.RELEASE + "（API " + Build.VERSION.SDK_INT + "）\n"
                 + "当前会话：" + diagnosticSessionId + "\n"
@@ -625,6 +641,32 @@ public class MainActivity extends Activity {
         return null;
     }
 
+    private void requestAoaFramedPermission() {
+        if (!ensureDiagnosticPrecheck("AOA 记录解析测试")) return;
+        recordEvent("AOA_FRAMED_READ", "开始 AOA 外层记录解析测试；只读，不创建套接字、不发送业务数据。");
+        UsbDevice device = findAoaDevice();
+        if (device == null) {
+            setUsbStatus("未找到 AOA 配件接口。请先执行 AOA 模式切换，再刷新诊断信息。");
+            refreshDiagnostics();
+            return;
+        }
+        if (usbManager.hasPermission(device)) {
+            testAoaFramedRead(device);
+            return;
+        }
+        try {
+            Intent intent = new Intent(ACTION_AOA_FRAME_PERMISSION);
+            intent.setPackage(getPackageName());
+            int flags = PendingIntent.FLAG_UPDATE_CURRENT;
+            if (Build.VERSION.SDK_INT >= 31) flags |= PendingIntent.FLAG_MUTABLE;
+            PendingIntent permissionIntent = PendingIntent.getBroadcast(this, 3, intent, flags);
+            usbManager.requestPermission(device, permissionIntent);
+            setUsbStatus("正在申请 AOA 配件 USB 权限；授权后只解析外层记录，不会发送业务数据。");
+        } catch (Exception e) {
+            setUsbStatus("申请 AOA 记录解析权限失败：" + e.getClass().getSimpleName() + "：" + safeMessage(e));
+        }
+    }
+
     private void requestAoaDataPermission() {
         if (!ensureDiagnosticPrecheck("AOA Bulk IN 只读测试")) return;
         recordEvent("AOA_BULK_IN", "开始只读 Bulk IN 测试。");
@@ -667,6 +709,120 @@ public class MainActivity extends Activity {
                 + "," + AoaTransportHeaderProbe.wordBigEndian(data, 4) + "]"
                 + ",u32le=[" + AoaTransportHeaderProbe.wordLittleEndian(data, 0)
                 + "," + AoaTransportHeaderProbe.wordLittleEndian(data, 4) + "]";
+    }
+
+    /**
+     * Read and decode complete outer AOA records. This path intentionally stops
+     * at framing/channel metadata; it never opens sockets or sends protocol data.
+     */
+    private void testAoaFramedRead(final UsbDevice device) {
+        Thread worker = new Thread(new Runnable() {
+            @Override public void run() {
+                UsbDeviceConnection connection = null;
+                UsbInterface claimedInterface = null;
+                String result;
+                try {
+                    if (device.getVendorId() != AOA_VENDOR_ID || !isAoaAccessoryProductId(device.getProductId())) {
+                        result = "按帧解析已取消：设备 VID/PID 已变化，请刷新诊断信息后重试。";
+                    } else {
+                        connection = usbManager.openDevice(device);
+                        if (connection == null) {
+                            result = "按帧解析失败：openDevice() 返回空。";
+                        } else {
+                            UsbEndpoint inEndpoint = null;
+                            for (int i = 0; i < device.getInterfaceCount(); i++) {
+                                UsbInterface candidate = device.getInterface(i);
+                                for (int j = 0; j < candidate.getEndpointCount(); j++) {
+                                    UsbEndpoint endpoint = candidate.getEndpoint(j);
+                                    if (endpoint.getType() == UsbConstants.USB_ENDPOINT_XFER_BULK
+                                            && endpoint.getDirection() == UsbConstants.USB_DIR_IN) {
+                                        claimedInterface = candidate;
+                                        inEndpoint = endpoint;
+                                        break;
+                                    }
+                                }
+                                if (inEndpoint != null) break;
+                            }
+                            if (inEndpoint == null || claimedInterface == null) {
+                                result = "按帧解析失败：设备没有暴露 Bulk IN 端点。";
+                            } else if (!connection.claimInterface(claimedInterface, true)) {
+                                result = "按帧解析失败：claimInterface() 未能声明接口。";
+                            } else {
+                                final int localBodyLimit = 1024 * 1024;
+                                AoaUsbExactLengthSource source =
+                                        new AoaUsbExactLengthSource(connection, inEndpoint, 500);
+                                long startedAtMs = android.os.SystemClock.elapsedRealtime();
+                                int records = 0;
+                                int totalBodyBytes = 0;
+                                appendTraceLine("AOA_FRAMED_START vid=" + hex4(device.getVendorId())
+                                        + " pid=" + hex4(device.getProductId())
+                                        + " interface=" + claimedInterface.getId()
+                                        + " endpoint=" + hex2(inEndpoint.getAddress())
+                                        + " timeout_ms=500 local_body_cap=" + localBodyLimit);
+                                StringBuilder summary = new StringBuilder();
+                                while (records < 10
+                                        && android.os.SystemClock.elapsedRealtime() - startedAtMs < 5000) {
+                                    AoaRecordReader.Record record = AoaRecordReader.readOne(source, localBodyLimit);
+                                    if (record == null) {
+                                        appendTraceLine("AOA_FRAMED_NO_HEADER elapsed_ms="
+                                                + (android.os.SystemClock.elapsedRealtime() - startedAtMs));
+                                        break;
+                                    }
+                                    records++;
+                                    totalBodyBytes += record.logicalBodyLength;
+                                    int sampleLength = Math.min(record.logicalBodyLength, 64);
+                                    String line = "AOA_RECORD index=" + records
+                                            + " channel_id=" + record.header.channelId
+                                            + " declared_body_length=" + record.logicalBodyLength
+                                            + " body_sample_hex=" + bytesToHex(record.body, sampleLength);
+                                    if (record.logicalBodyLength >= 4) {
+                                        line += " body_u32be_offset0=" + AoaTransportHeaderProbe.wordBigEndian(record.body, 0);
+                                    }
+                                    if (record.logicalBodyLength >= 8) {
+                                        line += " body_u32be_offset4=" + AoaTransportHeaderProbe.wordBigEndian(record.body, 4);
+                                    }
+                                    appendTraceLine(line);
+                                    if (summary.length() > 0) summary.append("\n");
+                                    summary.append("#").append(records).append(" channel=")
+                                            .append(record.header.channelId).append(" body=")
+                                            .append(record.logicalBodyLength).append("B");
+                                    if (record.logicalBodyLength > sampleLength) summary.append(" sample=").append(sampleLength).append("B");
+                                }
+                                appendTraceLine("AOA_FRAMED_END records=" + records
+                                        + " body_bytes=" + totalBodyBytes
+                                        + " elapsed_ms=" + (android.os.SystemClock.elapsedRealtime() - startedAtMs)
+                                        + " socket_creation=disabled business_writes=disabled");
+                                result = "AOA 外层记录解析结束。完整记录=" + records
+                                        + "，正文总字节=" + totalBodyBytes + "。\n"
+                                        + (summary.length() == 0 ? "未收到完整记录。" : summary.toString())
+                                        + "\n本测试只验证传输头/正文边界；不会创建套接字或发送认证/业务数据。";
+                            }
+                        }
+                    }
+                } catch (Exception e) {
+                    appendTraceLine("AOA_FRAMED_ERROR type=" + e.getClass().getSimpleName()
+                            + " message=" + safeMessage(e));
+                    result = "AOA 按帧解析异常：" + e.getClass().getSimpleName() + "：" + safeMessage(e);
+                } finally {
+                    if (connection != null) {
+                        if (claimedInterface != null) {
+                            try { connection.releaseInterface(claimedInterface); } catch (Exception ignored) { }
+                        }
+                        try { connection.close(); } catch (Exception ignored) { }
+                    }
+                }
+                final String finalResult = result;
+                runOnUiThread(new Runnable() {
+                    @Override public void run() {
+                        recordEvent("AOA_FRAMED_READ", summarizeBulkReadResult(finalResult));
+                        setUsbStatus(finalResult);
+                        refreshDiagnostics();
+                    }
+                });
+            }
+        }, "AOA-FramedRead-Diagnostic");
+        worker.setDaemon(true);
+        worker.start();
     }
 
     private void testAoaBulkRead(final UsbDevice device) {
@@ -1058,7 +1214,8 @@ public class MainActivity extends Activity {
         out.append("\n【USB 测试说明】\n");
         out.append("“申请 USB 权限并测试打开连接”仅打开并关闭设备，不声明接口或传输数据。\n");
         out.append("“尝试 AOA 模式切换”会执行标准 AOA 请求 51/52/53，并可能让对端 USB 重新枚举。\n");
-        out.append("“申请 AOA 设备权限并测试接收”支持 18D1:2D00/2D01/2D04/2D05，并限时读取第一个带 Bulk IN 的接口；2D01 的第二接口为 ADB，不用于 ICCOA 数据。若收到数据，会显示最多约 512 字节 HEX 样本；导出日志会省略 HEX 样本。\n");
+        out.append("“AOA 按帧读取并解析（只读）”按 8 字节传输头和声明长度读取完整正文，正文长度本地上限为 1 MiB；仅记录通道和有限 HEX 样本，不创建套接字、不发送业务数据。\n");
+        out.append("“原始 Bulk IN 抓包（诊断）”读取原始端点返回块，不保证每次返回等于一条逻辑记录。\n");
         out.append("官方 APK 静态检查发现 AOA 连接管理、消息头解析、ProtocolParser、CRC16、认证/证书协议和多个 channel ID 相关组件；具体帧字段和消息编号仍需从字节码进一步确认。\n");
         out.append("AOA 模式及只读接收结果均不能单独证明 ICCOA 业务协议已实现。\n");
         diagnostics.setText(out.toString());
