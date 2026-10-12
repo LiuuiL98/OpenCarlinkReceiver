@@ -179,7 +179,7 @@ public class MainActivity extends Activity {
         root.addView(title, matchWrap());
 
         TextView subtitle = new TextView(this);
-        subtitle.setText("车机兼容性诊断工具 · 版本 0.2.6-dev.5");
+        subtitle.setText("车机兼容性诊断工具 · 版本 0.2.6-dev.6");
         subtitle.setTextColor(0xFFB7C5D3);
         subtitle.setTextSize(13);
         subtitle.setPadding(0, dp(6), 0, dp(18));
@@ -316,7 +316,7 @@ public class MainActivity extends Activity {
         root.addView(socketProbeButton, socketProbeParams);
 
         TextView socketProbeHint = new TextView(this);
-        socketProbeHint.setText("实验模式会读取 AOA 创建套接字请求，并仅对端口 7236（RTSP）和 4321（UIBC）尝试建立本地监听；客户端接入后会发送一条候选通道响应。它不会转发媒体数据，也不实现认证，可能影响手机连接状态。需要只读解析时，请使用上方“AOA 按帧读取并解析（只读）”；需要逐次 USB 原始 HEX 时，请使用“原始 Bulk IN 抓包（诊断）”。");
+        socketProbeHint.setText("实验模式会读取 AOA 创建套接字请求，并仅对端口 7236（RTSP）和 4321（UIBC）尝试建立本地监听；本版本会在监听绑定后、等待客户端接入前发送一条候选通道响应，以验证握手顺序；该顺序和响应字段仍属实验假设。它不会转发媒体数据，也不实现认证，可能影响手机连接状态。需要只读解析时，请使用上方“AOA 按帧读取并解析（只读）”；需要逐次 USB 原始 HEX 时，请使用“原始 Bulk IN 抓包（诊断）”。");
         socketProbeHint.setTextColor(0xFFFFD166);
         socketProbeHint.setTextSize(12);
         root.addView(socketProbeHint, matchWrap());
@@ -769,7 +769,7 @@ public class MainActivity extends Activity {
         if (!ensureDiagnosticPrecheck("实验性 RTSP/UIBC 套接字生命周期验证")) return;
         new AlertDialog.Builder(this)
                 .setTitle("启动实验性通道验证？")
-                .setMessage("该测试会读取 AOA 创建套接字请求，并仅对端口 7236（RTSP）和 4321（UIBC）尝试建立本地监听。客户端接入后会向 USB OUT 发送一条 18 字节的候选通道响应（socketType 3/4，messageType 2）。不会发送认证载荷或转发媒体数据，但可能改变 S25 当前连接状态。测试最长约 35 秒，结束后关闭套接字。")
+                .setMessage("该测试会读取 AOA 创建套接字请求，并仅对端口 7236（RTSP）和 4321（UIBC）尝试建立本地监听。监听绑定后会先向 USB OUT 发送一条 18 字节的候选通道响应（socketType 3/4，messageType 2），再等待客户端连接，以排查响应顺序是否造成等待死锁。响应语义尚未验证；不会发送认证载荷或转发媒体数据，但可能改变 S25 当前连接状态。测试最长约 35 秒，结束后关闭套接字。")
                 .setNegativeButton("取消", null)
                 .setPositiveButton("继续测试", (dialog, which) -> requestAoaSocketProbePermission())
                 .show();
@@ -916,29 +916,35 @@ public class MainActivity extends Activity {
                                     final int candidateSocketType = requestedPort == 7236
                                             ? com.opencarlink.receiver.protocol.AoaCreateSocketFrameEncoder.SOCKET_TYPE_RTSP
                                             : com.opencarlink.receiver.protocol.AoaCreateSocketFrameEncoder.SOCKET_TYPE_UIBC;
+
+                                    // Experimental ordering check: acknowledge the socket request after
+                                    // binding the local listener, before waiting for the peer TCP connect.
+                                    // The exact ICCOA response semantics remain unverified.
+                                    final int assignedChannelId = nextChannelId.getAndIncrement();
+                                    byte[] frame = com.opencarlink.receiver.protocol.AoaCreateSocketFrameEncoder.encode(
+                                            requestedPort, assignedChannelId, candidateSocketType, 2);
+                                    int sent;
+                                    synchronized (writeLock) {
+                                        sent = activeConnection.bulkTransfer(responseEndpoint, frame, frame.length, 1000);
+                                    }
+                                    boolean sentOk = sent == frame.length;
+                                    if (sentOk) writes.incrementAndGet();
+                                    appendTraceLine("AOA_SOCKET_RESPONSE_WRITE port=" + requestedPort
+                                            + " phase=after_bind_before_accept"
+                                            + " assigned_channel_id=" + assignedChannelId
+                                            + " socket_type=" + candidateSocketType
+                                            + " candidate_message_type=2 expected_bytes=" + frame.length
+                                            + " actual_bytes=" + sent + " success=" + sentOk);
+
                                     Thread acceptWorker = new Thread(new Runnable() {
                                         @Override public void run() {
                                             Socket client = null;
                                             try {
                                                 client = acceptServer.accept();
                                                 synchronized (clients) { clients.add(client); }
-                                                final int assignedChannelId = nextChannelId.getAndIncrement();
                                                 accepts.incrementAndGet();
                                                 appendTraceLine("TCP_ACCEPT port=" + requestedPort
                                                         + " success=true assigned_channel_id=" + assignedChannelId);
-                                                byte[] frame = com.opencarlink.receiver.protocol.AoaCreateSocketFrameEncoder.encode(
-                                                        requestedPort, assignedChannelId, candidateSocketType, 2);
-                                                int sent;
-                                                synchronized (writeLock) {
-                                                    sent = activeConnection.bulkTransfer(responseEndpoint, frame, frame.length, 1000);
-                                                }
-                                                boolean sentOk = sent == frame.length;
-                                                if (sentOk) writes.incrementAndGet();
-                                                appendTraceLine("AOA_SOCKET_RESPONSE_WRITE port=" + requestedPort
-                                                        + " assigned_channel_id=" + assignedChannelId
-                                                        + " socket_type=" + candidateSocketType
-                                                        + " candidate_message_type=2 expected_bytes=" + frame.length
-                                                        + " actual_bytes=" + sent + " success=" + sentOk);
                                                 Thread.sleep(5000);
                                             } catch (SocketTimeoutException timeout) {
                                                 appendTraceLine("TCP_ACCEPT port=" + requestedPort + " success=false result=timeout");
