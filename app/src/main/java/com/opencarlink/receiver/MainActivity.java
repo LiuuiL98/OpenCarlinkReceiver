@@ -179,7 +179,7 @@ public class MainActivity extends Activity {
         root.addView(title, matchWrap());
 
         TextView subtitle = new TextView(this);
-        subtitle.setText("车机兼容性诊断工具 · 版本 0.2.6-dev.3");
+        subtitle.setText("车机兼容性诊断工具 · 版本 0.2.6-dev.5");
         subtitle.setTextColor(0xFFB7C5D3);
         subtitle.setTextSize(13);
         subtitle.setPadding(0, dp(6), 0, dp(18));
@@ -307,16 +307,16 @@ public class MainActivity extends Activity {
         root.addView(rawAoaReadButton, rawAoaReadParams);
 
         Button socketProbeButton = new Button(this);
-        socketProbeButton.setText("USB AOA 连续记录读取（只读，不发送控制帧）");
+        socketProbeButton.setText("RTSP/UIBC 套接字生命周期验证（实验性）");
         socketProbeButton.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View v) { requestAoaFramedPermission(); }
+            @Override public void onClick(View v) { confirmAoaSocketLifecycleProbe(); }
         });
         LinearLayout.LayoutParams socketProbeParams = matchWrap();
         socketProbeParams.topMargin = dp(8);
         root.addView(socketProbeButton, socketProbeParams);
 
         TextView socketProbeHint = new TextView(this);
-        socketProbeHint.setText("USB 专项只读模式：读取 AOA Bulk IN 上的完整外层记录，记录通道 ID、声明长度和有限 HEX 样本；不创建 TCP 监听、不发送 Bulk OUT 控制帧、不处理 Wi-Fi、媒体或认证数据。需要逐次 USB 原始返回块及完整 HEX 时，请使用上方“原始 Bulk IN 抓包（诊断）”。");
+        socketProbeHint.setText("实验模式会读取 AOA 创建套接字请求，并仅对端口 7236（RTSP）和 4321（UIBC）尝试建立本地监听；客户端接入后会发送一条候选通道响应。它不会转发媒体数据，也不实现认证，可能影响手机连接状态。需要只读解析时，请使用上方“AOA 按帧读取并解析（只读）”；需要逐次 USB 原始 HEX 时，请使用“原始 Bulk IN 抓包（诊断）”。");
         socketProbeHint.setTextColor(0xFFFFD166);
         socketProbeHint.setTextSize(12);
         root.addView(socketProbeHint, matchWrap());
