@@ -45,6 +45,9 @@ import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.SocketTimeoutException;
 import java.net.InetSocketAddress;
+import java.net.NetworkInterface;
+import java.net.InetAddress;
+import java.util.Enumeration;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
@@ -725,6 +728,40 @@ public class MainActivity extends Activity {
         }
     }
 
+    /** Logs interface names and IPv4 addresses only, to diagnose missing TCP accepts. */
+    private void appendNetworkInterfaceSnapshot(String phase) {
+        appendTraceLine("NETWORK_SNAPSHOT_BEGIN phase=" + phase);
+        try {
+            Enumeration<NetworkInterface> interfaces = NetworkInterface.getNetworkInterfaces();
+            if (interfaces == null) {
+                appendTraceLine("NETWORK_SNAPSHOT unavailable=true");
+                return;
+            }
+            while (interfaces.hasMoreElements()) {
+                NetworkInterface networkInterface = interfaces.nextElement();
+                boolean up;
+                try { up = networkInterface.isUp(); }
+                catch (Exception ignored) { up = false; }
+                StringBuilder line = new StringBuilder("NETWORK_INTERFACE name=")
+                        .append(networkInterface.getName())
+                        .append(" up=").append(up)
+                        .append(" loopback=").append(networkInterface.isLoopback());
+                Enumeration<InetAddress> addresses = networkInterface.getInetAddresses();
+                while (addresses.hasMoreElements()) {
+                    InetAddress address = addresses.nextElement();
+                    if (address instanceof java.net.Inet4Address) {
+                        line.append(" ipv4=").append(address.getHostAddress());
+                    }
+                }
+                appendTraceLine(line.toString());
+            }
+        } catch (Exception e) {
+            appendTraceLine("NETWORK_SNAPSHOT_ERROR type=" + e.getClass().getSimpleName());
+        } finally {
+            appendTraceLine("NETWORK_SNAPSHOT_END phase=" + phase);
+        }
+    }
+
     private void confirmAoaSocketLifecycleProbe() {
         if (!ensureDiagnosticPrecheck("实验性 RTSP/UIBC 套接字生命周期验证")) return;
         new AlertDialog.Builder(this)
@@ -814,6 +851,7 @@ public class MainActivity extends Activity {
                                 int listenerBinds = 0;
                                 ServerSocket rtspServer = null;
                                 ServerSocket uibcServer = null;
+                                appendNetworkInterfaceSnapshot("before_probe");
                                 appendTraceLine("AOA_SOCKET_PROBE_START vid=" + hex4(device.getVendorId())
                                         + " pid=" + hex4(device.getProductId())
                                         + " interface=" + claimedInterface.getId()
@@ -910,6 +948,7 @@ public class MainActivity extends Activity {
                                     acceptWorker.setDaemon(true);
                                     acceptWorker.start();
                                 }
+                                appendNetworkInterfaceSnapshot("after_probe");
                                 appendTraceLine("AOA_SOCKET_PROBE_END records=" + records
                                         + " listener_binds=" + listenerBinds
                                         + " accepts=" + accepts.get() + " response_writes=" + writes.get()
