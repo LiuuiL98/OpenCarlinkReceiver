@@ -319,3 +319,23 @@ The AUTH bridge / client-connect trigger is now an explicit unresolved dependenc
 ### Correction note: AUTH `onServerBound()` callback (2026-10-12)
 
 The earlier paragraph stating that `SocketChannel.onServerBound()` emits an AOA create-socket record was too strong and is superseded by the corrected trace above. In the inspected DEX, this method has an empty body. The generic `SocketChannel` server-start path binds and accepts TCP, but the bridge between the AUTH TCP listener and AOA control transport has not yet been located. Keep that link marked unresolved until a concrete caller or captured event proves it.
+
+
+## Candidate AUTH-to-AOA bridge: hypothesis separated from proven behavior (2026-10-12)
+
+The two socket mechanisms can now be placed side-by-side without claiming an unobserved callback:
+
+- The AOA create-socket handler `LK6/d.a(byte[], int)` creates `LK6/f` (a local `ServerSocket`) for incoming `socketType=1` records. For non-1 socket types, it creates the client-thread path, which connects to `127.0.0.1:<port>`.
+- Independently, `CarAuthClient.start()` starts a `SocketChannel` configured as a server channel on the predefined AUTH port 57209, bound to the loopback address supplied by the service.
+- The generic `SocketChannel.onServerBound()` method body is empty; it is not the missing bridge.
+
+**Working hypothesis, not yet proven:** if the peer sends an AOA create-socket record for AUTH with a non-server socket type, the AOA handler's loopback-client branch could connect to the AUTH `SocketChannel` listener at `127.0.0.1:57209`. This would explain how the USB/AOA transport and the separate local AUTH TCP service can meet without `onServerBound()` sending anything itself. However, no AUTH create-socket record or successful loopback connect appears in the current hardware capture, and this exact cross-component relationship has not been confirmed from a peer-side capture or an explicit call site.
+
+### What would confirm or falsify this hypothesis
+
+1. Capture the next session with only metadata: incoming AOA record port, channel ID, socket type, message type, timestamp; local bind/connect/accept result; and auth state transition.
+2. If an AUTH record arrives, compare its port and socket type with the observed listener state. Do not log its raw payload beyond the already-safe numeric header fields.
+3. Confirm whether the local connection target is `127.0.0.1:57209`, and whether it triggers `CarAuthClient$1.onConnect()` before the first AuthRequest.
+4. If no AUTH AOA record arrives, inspect the peer-side control path and the readiness gate rather than fabricating a record or manually opening the socket.
+
+Until these observations exist, keep the bridge as a hypothesis and keep active AUTH transport disabled in the receiver.
