@@ -73,7 +73,19 @@ The 10-second capture still produced only these two records, with repeated 500 m
 
 The previously collected S25 system log contains an accessory-attach launch of `com.samsung.android.carlink/.connection.iccoa.IccoaUsbConnectionActivity` at 2026-10-12 00:11:29.711. The activity was requested/resumed, then the system logged `wm_finish_activity` at 00:11:29.731 and destruction at 00:11:29.745. This is evidence that the phone's AOA accessory matching reached the Samsung ICCOA USB activity, but the activity ended almost immediately. It is **not** evidence of successful ICCOA authentication or a live Carlink session.
 
-This phone-side observation narrows the next investigation: prioritize the official activity's early-exit conditions and the receiver-side create-socket record handler, while keeping the test placeholder identity values clearly distinguished from a real certified head unit. Do not infer the exact exit reason from ActivityManager lifecycle lines alone; correlate with app-specific logs and the official APK call graph.
+This phone-side observation must be interpreted alongside the official activity call path below. The activity is a short-lived dispatcher and calls the connection manager before finishing on the normal path, so its quick exit is not by itself evidence of failure. The remaining question is whether the connection manager accepted the accessory identity and continued into the transport path. Keep test placeholder identity values clearly distinguished from a real certified head unit.
+
+## Sender-side USB activity and accessory validation
+
+Method-level inspection of `IccoaUsbConnectionActivity` shows that `onCreate()` calls `w0(...)`; the latter checks onboarding/permission state, invokes the connection manager with protocol string `iccoa`, and then calls `finish()`. The connection manager's `startAOAConnect` path delegates to the ICCOA connection implementation. Therefore, the ActivityManager sequence in the S25 log—launch, app-request finish, destroy within roughly 34 ms—is consistent with the activity handing off work and finishing; it cannot be used alone to conclude that ICCOA rejected the connection.
+
+The ICCOA connection implementation's USB-AOA path calls `UsbManager.getAccessoryList()` and checks the accessory's manufacturer against `ICCOA` and model against `CarLink`. It also obtains the accessory serial string and splits it on semicolons before constructing the internal car-device descriptor. A failure path logs `wrong createAOACarDevice`; the same class has a distinct log `ICCOA not support ADB connect` for its ADB-connect path.
+
+Implications for our test:
+- The public descriptor fields `manufacturer=ICCOA` and `model=CarLink` match the two explicit string comparisons seen in the APK.
+- That is only the first gate. The serial field must also conform to the official parser's six-segment expectations; our synthetic values are not proof of a valid official head-unit identity.
+- The current S25 system log contains ActivityManager lifecycle events but no corresponding app-tagged `CLINK/IccoaConnection` or `AOAConnectManager` lines in the captured window. It therefore cannot tell us whether serial validation succeeded or why any later connection attempt stopped.
+- Do not publish or log the six serial segments or `usb_pin_code` raw. For the next capture, export only redacted app-tagged log lines and stage/result messages, with identity payloads omitted.
 
 ## Official APK classes to trace
 
