@@ -52,6 +52,7 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public class MainActivity extends Activity {
     private static final String ACTION_USB_PERMISSION = "com.opencarlink.receiver.USB_PERMISSION";
@@ -76,6 +77,8 @@ public class MainActivity extends Activity {
     private EditText carModIdInput, carIdInput, carShortNameInput, usbPinCodeInput, carProtocolVersionInput, carVendorDataInput;
     private UsbManager usbManager;
     private boolean receiverRegistered;
+    // USB Bulk IN is a single stream; never allow multiple diagnostic workers to consume it concurrently.
+    private final AtomicBoolean usbReadOperationActive = new AtomicBoolean(false);
     private final BroadcastReceiver usbPermissionReceiver = new BroadcastReceiver() {
         @Override public void onReceive(Context context, Intent intent) {
             String action = intent.getAction();
@@ -800,6 +803,11 @@ public class MainActivity extends Activity {
      * implement media forwarding or authentication.
      */
     private void testAoaSocketLifecycleProbe(final UsbDevice device) {
+        if (!usbReadOperationActive.compareAndSet(false, true)) {
+            appendTraceLine("USB_READ_GUARD_BLOCK operation=SOCKET_PROBE reason=another_usb_reader_active");
+            setUsbStatus("已有 USB 诊断读取正在运行。请等待其结束后再启动其他 USB 测试，避免多个线程争用 Bulk IN 端点。");
+            return;
+        }
         Thread worker = new Thread(new Runnable() {
             @Override public void run() {
                 UsbDeviceConnection connection = null;
@@ -976,6 +984,7 @@ public class MainActivity extends Activity {
                         }
                         try { connection.close(); } catch (Exception ignored) { }
                     }
+                    usbReadOperationActive.set(false);
                 }
                 final String finalResult = result;
                 runOnUiThread(new Runnable() {
@@ -1010,6 +1019,11 @@ public class MainActivity extends Activity {
      * at framing/channel metadata; it never opens sockets or sends protocol data.
      */
     private void testAoaFramedRead(final UsbDevice device) {
+        if (!usbReadOperationActive.compareAndSet(false, true)) {
+            appendTraceLine("USB_READ_GUARD_BLOCK operation=FRAMED_READ reason=another_usb_reader_active");
+            setUsbStatus("已有 USB 诊断读取正在运行。请等待其结束后再启动其他 USB 测试，避免多个线程争用 Bulk IN 端点。");
+            return;
+        }
         Thread worker = new Thread(new Runnable() {
             @Override public void run() {
                 UsbDeviceConnection connection = null;
@@ -1122,6 +1136,7 @@ public class MainActivity extends Activity {
                         }
                         try { connection.close(); } catch (Exception ignored) { }
                     }
+                    usbReadOperationActive.set(false);
                 }
                 final String finalResult = result;
                 runOnUiThread(new Runnable() {
@@ -1138,6 +1153,11 @@ public class MainActivity extends Activity {
     }
 
     private void testAoaBulkRead(final UsbDevice device) {
+        if (!usbReadOperationActive.compareAndSet(false, true)) {
+            appendTraceLine("USB_READ_GUARD_BLOCK operation=BULK_READ reason=another_usb_reader_active");
+            setUsbStatus("已有 USB 诊断读取正在运行。请等待其结束后再启动其他 USB 测试，避免多个线程争用 Bulk IN 端点。");
+            return;
+        }
         Thread worker = new Thread(new Runnable() {
             @Override public void run() {
                 UsbDeviceConnection connection = null;
@@ -1249,6 +1269,7 @@ public class MainActivity extends Activity {
                         }
                         try { connection.close(); } catch (Exception ignored) { }
                     }
+                    usbReadOperationActive.set(false);
                 }
                 final String finalResult = result;
                 runOnUiThread(new Runnable() {
